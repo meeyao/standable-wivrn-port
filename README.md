@@ -3,6 +3,29 @@
 Run the real Standable Full Body Estimation SteamVR driver under WiVRn on Linux.
 No SteamVR. 8 proxy trackers in VRChat.
 
+> # :warning: EXPERIMENTAL — BROKEN / INCOMPLETE STATE
+>
+> **THIS IS AN EXPERIMENTAL, PARTIALLY BROKEN PORT. IT IS NOT READY FOR
+> NORMAL USE.**
+>
+> **Known to be broken or missing right now:**
+>
+> - **Manual in-driver T-pose calibration does not fire.** The driver's own
+>   calibration gesture never completes under WiVRn.
+> - **Body proportions/IK are wrong.** The driver runs at a default 105 cm
+>   height until a calibration completes, so arms/legs/spine are scaled wrong
+>   (elbows off, hips/spine inverted).
+> - **Only the VRChat auto-calibration (OSC) path works**, and only roughly
+>   (~70% accuracy observed).
+> - **The in-driver Standable GUI reports "SteamVR missing"** — expected; ignore
+>   it. The GUI is not required.
+> - Expect breakage on any SteamVR, WiVRn, Proton, VRChat or Standable update.
+>   Nothing here is stable.
+>
+> **USE AT YOUR OWN RISK. No support, no guarantees, may break your setup.**
+>
+> If you want a working Standable setup today, use **SteamVR on Windows**.
+
 ## Requirements
 
 - WiVRn installed, or built by this installer

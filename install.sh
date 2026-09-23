@@ -8,6 +8,17 @@ set -euo pipefail
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
+# When invoked through sudo, $HOME and the XDG vars belong to root, not to the
+# user who owns the WiVRn/Steam setup. Resolve the invoking user's home so the
+# systemd drop-in and caches land in the right place.
+INVOKING_USER="${SUDO_USER:-$(id -un)}"
+if [ "$INVOKING_USER" = "root" ]; then
+    INVOKING_HOME="$HOME"
+else
+    INVOKING_HOME="$(getent passwd "$INVOKING_USER" | cut -d: -f6)"
+    [ -n "$INVOKING_HOME" ] || INVOKING_HOME="$HOME"
+fi
+
 # --- overridable configuration ---------------------------------------------
 PORT_INSTALLER_REPO="${PORT_INSTALLER_REPO:-https://github.com/meeyao/standable-linux-port}"
 PORT_INSTALLER_REF="${PORT_INSTALLER_REF:-}"   # empty = repo default branch
@@ -15,9 +26,9 @@ WIVRN_REPO="${WIVRN_REPO:-https://github.com/meeyao/wivrn-standable-port}"
 WIVRN_REF="${WIVRN_REF:-main}"
 REPO_RELEASE_BASE="${REPO_RELEASE_BASE:-https://github.com/meeyao/standable-wivrn-port/releases/latest/download}"
 
-XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$INVOKING_HOME/.config}"
+XDG_DATA_HOME="${XDG_DATA_HOME:-$INVOKING_HOME/.local/share}"
+XDG_CACHE_HOME="${XDG_CACHE_HOME:-$INVOKING_HOME/.cache}"
 CACHE_DIR="$XDG_CACHE_HOME/standable-wivrn-port"
 
 WIVRN_LIBDIR="/usr/lib/wivrn"
@@ -251,21 +262,46 @@ install_source() {
 }
 
 # --- systemd drop-in --------------------------------------------------------
+# Runs on behalf of the invoking user: when this script runs as root (sudo), the
+# drop-in must live in that user's config dir, owned by them, and systemctl must
+# talk to their user bus.
 install_dropin() {
     local dir="$XDG_CONFIG_HOME/systemd/user/wivrn.service.d"
     local f="$dir/standable.conf"
     say "systemd drop-in: $f"
-    mkdir -p "$dir"
-    bak "$f"
-    cat >"$f" <<'EOF'
+    if [ "$(id -u)" -eq 0 ] && [ "$INVOKING_USER" != "root" ]; then
+        runuser -u "$INVOKING_USER" -- mkdir -p "$dir"
+    else
+        mkdir -p "$dir"
+    fi
+    [ -e "$f" ] || : >"$f"
+    # Write through the invoking user so the file is not root-owned.
+    local write="$f"
+    if [ "$(id -u)" -eq 0 ] && [ "$INVOKING_USER" != "root" ]; then
+        runuser -u "$INVOKING_USER" -- tee "$write" >/dev/null <<'EOF'
 [Service]
 Environment=WIVRN_USE_STEAMVR_LH=1
 Environment=LH_LOAD_STANDABLE=1
 Environment=LH_LOAD_LIGHTHOUSE=0
 Environment=LH_DISCOVER_WAIT_MS=30000
 EOF
+    else
+        cat >"$write" <<'EOF'
+[Service]
+Environment=WIVRN_USE_STEAMVR_LH=1
+Environment=LH_LOAD_STANDABLE=1
+Environment=LH_LOAD_LIGHTHOUSE=0
+Environment=LH_DISCOVER_WAIT_MS=30000
+EOF
+    fi
     if command -v systemctl >/dev/null 2>&1; then
-        systemctl --user daemon-reload || true
+        # systemctl --user needs the invoking user's session bus.
+        if [ "$(id -u)" -eq 0 ] && [ "$INVOKING_USER" != "root" ] && command -v runuser >/dev/null 2>&1; then
+            XDG_RUNTIME_DIR="/run/user/$(id -u "$INVOKING_USER")" \
+                runuser -u "$INVOKING_USER" -- systemctl --user daemon-reload || true
+        else
+            systemctl --user daemon-reload || true
+        fi
     fi
 }
 

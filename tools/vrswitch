@@ -18,6 +18,12 @@ die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 require() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
 
+# This drives the user's session bus and reads the user's OpenXR/OpenVR config,
+# so it must not run as root.
+if [ "$(id -u)" -eq 0 ]; then
+    die "run as your normal user, not root/sudo"
+fi
+
 usage() {
     cat <<'EOF'
 Usage: vrswitch <wivrn|steamvr|status>

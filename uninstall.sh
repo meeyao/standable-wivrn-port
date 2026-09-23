@@ -5,8 +5,17 @@ set -euo pipefail
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+# When run through sudo, $HOME belongs to root; use the invoking user's home.
+INVOKING_USER="${SUDO_USER:-$(id -un)}"
+if [ "$INVOKING_USER" = "root" ]; then
+    INVOKING_HOME="$HOME"
+else
+    INVOKING_HOME="$(getent passwd "$INVOKING_USER" | cut -d: -f6)"
+    [ -n "$INVOKING_HOME" ] || INVOKING_HOME="$HOME"
+fi
+
+XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$INVOKING_HOME/.config}"
+XDG_CACHE_HOME="${XDG_CACHE_HOME:-$INVOKING_HOME/.cache}"
 CACHE_DIR="$XDG_CACHE_HOME/standable-wivrn-port"
 
 WIVRN_LIBDIR="/usr/lib/wivrn"
@@ -45,22 +54,37 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 run_root() { if [ -n "$SUDO" ]; then $SUDO "$@"; else "$@"; fi; }
 
+# systemctl --user must run as the invoking user, on their session bus.
+user_systemctl() {
+    if [ "$(id -u)" -eq 0 ] && [ "$INVOKING_USER" != "root" ] && command -v runuser >/dev/null 2>&1; then
+        XDG_RUNTIME_DIR="/run/user/$(id -u "$INVOKING_USER")" \
+            runuser -u "$INVOKING_USER" -- systemctl --user "$@"
+    else
+        systemctl --user "$@"
+    fi
+}
+
 say "stopping wivrn.service"
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user stop wivrn.service >/dev/null 2>&1 || true
-    systemctl --user reset-failed wivrn.service >/dev/null 2>&1 || true
+    user_systemctl stop wivrn.service >/dev/null 2>&1 || true
+    user_systemctl reset-failed wivrn.service >/dev/null 2>&1 || true
 fi
 pkill -f wivrn-server >/dev/null 2>&1 || true
 pkill -f ignition_server >/dev/null 2>&1 || true
 
 if [ -f "$DROPIN" ]; then
     say "removing $DROPIN"
-    rm -f "$DROPIN"
-    rmdir "$(dirname "$DROPIN")" 2>/dev/null || true
+    if [ "$(id -u)" -eq 0 ] && [ "$INVOKING_USER" != "root" ] && command -v runuser >/dev/null 2>&1; then
+        runuser -u "$INVOKING_USER" -- rm -f "$DROPIN"
+        runuser -u "$INVOKING_USER" -- rmdir "$(dirname "$DROPIN")" 2>/dev/null || true
+    else
+        rm -f "$DROPIN"
+        rmdir "$(dirname "$DROPIN")" 2>/dev/null || true
+    fi
 fi
 
 if command -v systemctl >/dev/null 2>&1; then
-    systemctl --user daemon-reload || true
+    user_systemctl daemon-reload || true
 fi
 
 say "removing WiVRn files"
