@@ -1,0 +1,312 @@
+diff --git a/src/xrt/drivers/steamvr_lh/interfaces/context.hpp b/src/xrt/drivers/steamvr_lh/interfaces/context.hpp
+index 20a1fc12b..184e4f3ec 100644
+--- a/src/xrt/drivers/steamvr_lh/interfaces/context.hpp
++++ b/src/xrt/drivers/steamvr_lh/interfaces/context.hpp
+@@ -114,6 +114,28 @@ public:
+ 	bool in_setup{true};
+ 	const u_logging_level log_level;
+ 
++	//! External devices whose poses are exposed to hosted drivers via
++	//! GetRawTrackedDevicePoses. Body-estimation drivers (e.g. Standable) read
++	//! the headset and controller poses from here to estimate the body.
++	xrt_device *feed_head{nullptr};
++	xrt_device *feed_left{nullptr};
++	xrt_device *feed_right{nullptr};
++
++	//! OpenVR devices we synthesised for the feeder headset/controllers, so the
++	//! hosted driver sees a headset at index 0 and controllers at 1/2 exactly
++	//! like on SteamVR. These are kept out of the WiVRn device list.
++	Device *virtual_head{nullptr};
++	Device *virtual_left{nullptr};
++	Device *virtual_right{nullptr};
++
++	void
++	set_feeder_devices(xrt_device *head, xrt_device *left, xrt_device *right)
++	{
++		feed_head = head;
++		feed_left = left;
++		feed_right = right;
++	}
++
+ 	void
+ 	wait_for_discover();
+ 
+diff --git a/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp b/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
+index 8346bedee..98ae062f3 100644
+--- a/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
++++ b/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
+@@ -34,6 +34,7 @@
+ #include "steamvr_lh_interface.h"
+ #include "device.hpp"
+ 
++#include <algorithm>
+ #include <cstring>
+ #include <dlfcn.h>
+ #include <memory>
+@@ -547,21 +548,72 @@ Context::GetRawTrackedDevicePoses(float fPredictedSecondsFromNow,
+                                   vr::TrackedDevicePose_t *pTrackedDevicePoseArray,
+                                   uint32_t unTrackedDevicePoseArrayCount)
+ {
+-	// This is the bare minimum required for SlimeVR's HMD feedback to work
+-	if (unTrackedDevicePoseArrayCount != 10 || this->hmd == nullptr)
++	// Provide the HMD and controller poses to hosted drivers that read them
++	// (SlimeVR HMD feedback, Standable body estimation, etc). Device 0 is the
++	// HMD, 1 the left controller and 2 the right controller.
++	if (pTrackedDevicePoseArray == nullptr)
+ 		return;
+ 	const uint64_t time =
+ 	    std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+ 	        .count();
+-	xrt_space_relation head = {};
+-	xrt_device_get_tracked_pose(this->hmd, XRT_INPUT_GENERIC_HEAD_POSE, time, &head);
+-	xrt_matrix_3x3 rot = {};
+-	math_matrix_3x3_from_quat(&head.pose.orientation, &rot);
+-	pTrackedDevicePoseArray[0].mDeviceToAbsoluteTracking = {{
+-	    {rot.v[0], rot.v[3], rot.v[6], head.pose.position.x},
+-	    {rot.v[1], rot.v[4], rot.v[7], head.pose.position.y},
+-	    {rot.v[2], rot.v[5], rot.v[8], head.pose.position.z},
+-	}};
++
++	xrt_device *devices[3] = {feed_head, feed_left, feed_right};
++	const xrt_input_name inputs[3] = {XRT_INPUT_GENERIC_HEAD_POSE, XRT_INPUT_TOUCH_GRIP_POSE, XRT_INPUT_TOUCH_GRIP_POSE};
++
++	// The stevr VR runtime feeds the driver a copy of the last pose it saw
++	// for each device, including ones that have no valid tracking yet, so
++	// fill every slot the caller asked for (even if empty).
++	uint32_t n = std::min<uint32_t>(unTrackedDevicePoseArrayCount, 3);
++	for (uint32_t i = 0; i < unTrackedDevicePoseArrayCount; i++) {
++		pTrackedDevicePoseArray[i].eTrackingResult = vr::TrackingResult_Uninitialized;
++		pTrackedDevicePoseArray[i].bPoseIsValid = false;
++		pTrackedDevicePoseArray[i].bDeviceIsConnected = false;
++		pTrackedDevicePoseArray[i].vVelocity.v[0] = 0;
++		pTrackedDevicePoseArray[i].vVelocity.v[1] = 0;
++		pTrackedDevicePoseArray[i].vVelocity.v[2] = 0;
++		pTrackedDevicePoseArray[i].vAngularVelocity.v[0] = 0;
++		pTrackedDevicePoseArray[i].vAngularVelocity.v[1] = 0;
++		pTrackedDevicePoseArray[i].vAngularVelocity.v[2] = 0;
++		memset(&pTrackedDevicePoseArray[i].mDeviceToAbsoluteTracking, 0,
++		       sizeof(pTrackedDevicePoseArray[i].mDeviceToAbsoluteTracking));
++	}
++
++	for (uint32_t i = 0; i < n; i++) {
++		xrt_device *dev = devices[i];
++		if (dev == nullptr || dev->get_tracked_pose == nullptr)
++			continue;
++		xrt_space_relation rel = {};
++		if (xrt_device_get_tracked_pose(dev, inputs[i], time, &rel) != XRT_SUCCESS)
++			continue;
++		if ((rel.relation_flags & XRT_SPACE_RELATION_POSITION_VALID_BIT) == 0 &&
++		    (rel.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) == 0)
++			continue;
++
++		xrt_matrix_3x3 rot = {};
++		math_matrix_3x3_from_quat(&rel.pose.orientation, &rot);
++		pTrackedDevicePoseArray[i].mDeviceToAbsoluteTracking = {{
++		    {rot.v[0], rot.v[3], rot.v[6], rel.pose.position.x},
++		    {rot.v[1], rot.v[4], rot.v[7], rel.pose.position.y},
++		    {rot.v[2], rot.v[5], rot.v[8], rel.pose.position.z},
++		}};
++		pTrackedDevicePoseArray[i].bPoseIsValid = true;
++		pTrackedDevicePoseArray[i].bDeviceIsConnected = true;
++		pTrackedDevicePoseArray[i].eTrackingResult = vr::TrackingResult_Running_OK;
++
++		// SteamVR drivers report device velocities; consumers such as Standable
++		// derive motion from them. WiVRn devices already carry these in the
++		// space relation, so pass them through instead of dropping them.
++		if (rel.relation_flags & XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT) {
++			pTrackedDevicePoseArray[i].vVelocity.v[0] = rel.linear_velocity.x;
++			pTrackedDevicePoseArray[i].vVelocity.v[1] = rel.linear_velocity.y;
++			pTrackedDevicePoseArray[i].vVelocity.v[2] = rel.linear_velocity.z;
++		}
++		if (rel.relation_flags & XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT) {
++			pTrackedDevicePoseArray[i].vAngularVelocity.v[0] = rel.angular_velocity.x;
++			pTrackedDevicePoseArray[i].vAngularVelocity.v[1] = rel.angular_velocity.y;
++			pTrackedDevicePoseArray[i].vAngularVelocity.v[2] = rel.angular_velocity.z;
++		}
++	}
+ }
+ 
+ void
+@@ -935,7 +987,7 @@ Context::TrackedDeviceToPropertyContainer(vr::TrackedDeviceIndex_t nDevice)
+ void
+ Context::Log(const char *pchLogMessage)
+ {
+-	CTX_TRACE("[lighthouse]: %s", pchLogMessage);
++	U_LOG_I("[steamvr_lh driver] %s", pchLogMessage);
+ }
+ // NOLINTEND(bugprone-easily-swappable-parameters)
+ 
+@@ -984,6 +1036,94 @@ destroy(struct xrt_system_devices *xsysd)
+ 	free(svrs);
+ }
+ 
++static struct xrt_device *g_feed_head = nullptr;
++static struct xrt_device *g_feed_left = nullptr;
++static struct xrt_device *g_feed_right = nullptr;
++
++static void
++set_device_property(Device *dev, vr::ETrackedDeviceProperty prop, vr::PropertyTypeTag_t tag, const void *data, uint32_t size)
++{
++	vr::PropertyWrite_t w{};
++	w.prop = prop;
++	w.writeType = vr::EPropertyWriteType::PropertyWrite_Set;
++	w.unTag = tag;
++	w.pvBuffer = const_cast<void *>(data);
++	w.unBufferSize = size;
++	dev->handle_properties(&w, 1);
++}
++
++static void
++set_device_string(Device *dev, vr::ETrackedDeviceProperty prop, const char *value)
++{
++	set_device_property(dev, prop, vr::k_unStringPropertyTag, value, (uint32_t)strlen(value) + 1);
++}
++
++/*!
++ * Populate the OpenVR device list with a virtual HMD at index 0 and virtual
++ * controllers at indices 1/2. Body-estimation drivers such as Standable look
++ * up the headset/controllers by Prop_DeviceClass_Int32; without these they see
++ * no headset and their own trackers take the low indices, so they can never
++ * estimate. Runs before the hosted driver adds its own devices so those land
++ * at index 3 and up. These devices are intentionally kept out of the WiVRn
++ * device list.
++ */
++static void
++create_steamvr_side_devices(const std::shared_ptr<Context> &ctx)
++{
++	if (ctx == nullptr)
++		return;
++
++	if (ctx->hmd == nullptr) {
++		auto *vhmd = new HmdDevice(DeviceBuilder{ctx, nullptr, "wivrn-hmd", STEAM_INSTALL_DIR});
++		int32_t dev_class = vr::TrackedDeviceClass_HMD;
++		set_device_property(vhmd, vr::Prop_DeviceClass_Int32, vr::k_unInt32PropertyTag, &dev_class, sizeof(dev_class));
++		set_device_string(vhmd, vr::Prop_TrackingSystemName_String, "wivrn");
++		set_device_string(vhmd, vr::Prop_ModelNumber_String, "WiVRn HMD");
++		set_device_string(vhmd, vr::Prop_SerialNumber_String, "wivrn-hmd-0");
++		set_device_string(vhmd, vr::Prop_ManufacturerName_String, "WiVRn");
++		set_device_string(vhmd, vr::Prop_RenderModelName_String, "generic_hmd");
++		bool false_val = false;
++		set_device_property(vhmd, vr::Prop_DeviceIsWireless_Bool, vr::k_unBoolPropertyTag, &false_val,
++		                    sizeof(false_val));
++		ctx->hmd = vhmd;
++		ctx->virtual_head = vhmd;
++	}
++
++	struct VirtualController
++	{
++		struct xrt_device *feed;
++		Device **slot;
++		size_t index;
++		const char *serial;
++		const char *model;
++		int32_t role;
++		const char *ctype;
++	};
++	const VirtualController ctrls[] = {
++	    {g_feed_left, &ctx->virtual_left, 0, "wivrn-left", "WiVRn Left Controller",
++	     vr::TrackedControllerRole_LeftHand, "oculus_touch"},
++	    {g_feed_right, &ctx->virtual_right, 1, "wivrn-right", "WiVRn Right Controller",
++	     vr::TrackedControllerRole_RightHand, "oculus_touch"},
++	};
++	for (const auto &c : ctrls) {
++		if (c.feed == nullptr || ctx->controller[c.index] != nullptr)
++			continue;
++		auto *vc = new ControllerDevice(c.index + 1, DeviceBuilder{ctx, nullptr, c.serial, STEAM_INSTALL_DIR});
++		int32_t dev_class = vr::TrackedDeviceClass_Controller;
++		set_device_property(vc, vr::Prop_DeviceClass_Int32, vr::k_unInt32PropertyTag, &dev_class, sizeof(dev_class));
++		int32_t role = c.role;
++		set_device_property(vc, vr::Prop_ControllerRoleHint_Int32, vr::k_unInt32PropertyTag, &role, sizeof(role));
++		set_device_string(vc, vr::Prop_TrackingSystemName_String, "wivrn");
++		set_device_string(vc, vr::Prop_ModelNumber_String, c.model);
++		set_device_string(vc, vr::Prop_SerialNumber_String, c.serial);
++		set_device_string(vc, vr::Prop_ManufacturerName_String, "WiVRn");
++		set_device_string(vc, vr::Prop_RenderModelName_String, "generic_controller");
++		set_device_string(vc, vr::Prop_ControllerType_String, c.ctype);
++		ctx->controller[c.index] = vc;
++		*c.slot = vc;
++	}
++}
++
+ extern "C" enum xrt_result
+ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out_xsysd)
+ {
+@@ -1053,6 +1193,12 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
+ 	if (svrs->ctx == nullptr)
+ 		return xrt_result::XRT_ERROR_DEVICE_CREATION_FAILED;
+ 
++	// Register the WiVRn headset/controllers with the host and create the
++	// virtual OpenVR devices before the hosted driver adds its own, so the
++	// driver sees HMD@0, controllers@1/2 and its trackers at 3+.
++	svrs->ctx->set_feeder_devices(g_feed_head, g_feed_left, g_feed_right);
++	create_steamvr_side_devices(svrs->ctx);
++
+ 	U_LOG_IFL_I(level, "Lighthouse initialization complete, giving time to setup connected devices...");
+ 	// RunFrame needs to be called to detect controllers
+ 	svrs->ctx->wait_for_discover();
+@@ -1072,8 +1218,8 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
+ 	xsysd->create_body_tracker = b_body_tracker_create;
+ 	xsysd->create_hand_tracker = b_hand_tracker_create;
+ 
+-	// Include the HMD
+-	if (svrs->ctx->hmd) {
++	// Include the HMD (skipping the virtual one we added for the hosted driver)
++	if (svrs->ctx->hmd && svrs->ctx->hmd != svrs->ctx->virtual_head) {
+ 		if (xp && svrs->ctx->hmd->variant == VIVE_VARIANT_PRO2 && !svrs->ctx->hmd->init_vive_pro_2(xp)) {
+ 			U_LOG_IFL_W(level, "Found Vive Pro 2, but failed to initialize.");
+ 		}
+@@ -1083,10 +1229,11 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
+ 		xsysd->static_roles.head = xsysd->static_xdevs[xsysd->static_xdev_count++];
+ 	}
+ 
+-	// Include the controllers
++	// Include the controllers (skipping the virtual ones)
+ 	for (size_t i = 0; i < MAX_CONTROLLERS; i++) {
+-		if (svrs->ctx->controller[i]) {
+-			xsysd->static_xdevs[xsysd->static_xdev_count++] = svrs->ctx->controller[i];
++		auto *c = svrs->ctx->controller[i];
++		if (c && c != svrs->ctx->virtual_left && c != svrs->ctx->virtual_right) {
++			xsysd->static_xdevs[xsysd->static_xdev_count++] = c;
+ 		}
+ 	}
+ 
+@@ -1094,3 +1241,16 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
+ 
+ 	return xrt_result::XRT_SUCCESS;
+ }
++
++void
++steamvr_lh_set_feeder_devices(struct xrt_device *head,
++                              struct xrt_device *left,
++                              struct xrt_device *right)
++{
++	// Must be called before steamvr_lh_create_devices: stash the WiVRn devices
++	// so the host can expose their poses and synthesise the OpenVR HMD and
++	// controllers before the hosted driver registers its own devices.
++	g_feed_head = head;
++	g_feed_left = left;
++	g_feed_right = right;
++}
+diff --git a/src/xrt/drivers/steamvr_lh/steamvr_lh_interface.h b/src/xrt/drivers/steamvr_lh/steamvr_lh_interface.h
+index 15ed38d82..eee5870bc 100644
+--- a/src/xrt/drivers/steamvr_lh/steamvr_lh_interface.h
++++ b/src/xrt/drivers/steamvr_lh/steamvr_lh_interface.h
+@@ -36,6 +36,18 @@ extern "C" {
+ enum xrt_result
+ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out_xsysd);
+ 
++/*!
++ * Give the steamvr_lh host context references to the real headset and
++ * controllers, so hosted drivers (SlimeVR, Standable, ...) can read their
++ * poses through IVRServerDriverHost::GetRawTrackedDevicePoses.
++ *
++ * @ingroup drv_steamvr_lh
++ */
++void
++steamvr_lh_set_feeder_devices(struct xrt_device *head,
++                              struct xrt_device *left,
++                              struct xrt_device *right);
++
+ 
+ #ifdef __cplusplus
+ }

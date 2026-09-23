@@ -1,0 +1,6 @@
+build/
+*.o
+*.obj
+*.a
+*.bak
+*.bak-*
