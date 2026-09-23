@@ -1,5 +1,5 @@
 /*
- * steam_api64.dll — minimal Steamworks shim for Standable under Wine/Proton.
+ * steam_api64.dll: minimal Steamworks shim for Standable under Wine/Proton.
  *
  * Standable FBE checks Steam ownership at driver init: it calls
  * SteamInternal_SteamAPI_Init("SteamUtils010", 0) and, if that succeeds,

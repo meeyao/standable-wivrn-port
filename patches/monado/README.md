@@ -8,7 +8,7 @@ fork carries three commits on top of that rev:
 
 | Commit | What |
 |---|---|
-| `c37181c62` | `d/steamvr_lh: load Standable Ignition shim (LH_LOAD_STANDABLE)` — and `LH_LOAD_LIGHTHOUSE` |
+| `c37181c62` | `d/steamvr_lh: load Standable Ignition shim (LH_LOAD_STANDABLE)` and `LH_LOAD_LIGHTHOUSE` |
 | `5c896b5e5` | `d/steamvr_lh: Add LH_MAX_EXTRAPOLATION_MS` |
 | `336a8f4c3` | `st/oxr: implement XR_HTCX_vive_tracker_interaction with FBT tracker roles` |
 

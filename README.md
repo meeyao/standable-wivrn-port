@@ -3,7 +3,7 @@
 Run the real Standable Full Body Estimation SteamVR driver under WiVRn on Linux.
 No SteamVR. 8 proxy trackers in VRChat.
 
-> # :warning: EXPERIMENTAL — BROKEN / INCOMPLETE STATE
+> # :warning: EXPERIMENTAL: BROKEN / INCOMPLETE STATE
 >
 > **THIS IS AN EXPERIMENTAL, PARTIALLY BROKEN PORT. IT IS NOT READY FOR
 > NORMAL USE.**
@@ -17,14 +17,16 @@ No SteamVR. 8 proxy trackers in VRChat.
 >   (elbows off, hips/spine inverted).
 > - **Only the VRChat auto-calibration (OSC) path works**, and only roughly
 >   (~70% accuracy observed).
-> - **The in-driver Standable GUI reports "SteamVR missing"** — expected; ignore
+> - **The in-driver Standable GUI reports "SteamVR missing"**: expected; ignore
 >   it. The GUI is not required.
 > - Expect breakage on any SteamVR, WiVRn, Proton, VRChat or Standable update.
 >   Nothing here is stable.
 >
 > **USE AT YOUR OWN RISK. No support, no guarantees, may break your setup.**
 >
-> If you want a working Standable setup today, use **SteamVR on Windows**.
+> If you want a working Standable setup today, use
+> **[SteamVR Port](https://github.com/meeyao/standable-linux-port)** (SteamVR on
+> Linux) or **SteamVR on Windows**. XD :stuck_out_tongue:
 
 ## Requirements
 
