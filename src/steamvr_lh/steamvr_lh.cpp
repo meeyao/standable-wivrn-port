@@ -558,6 +558,17 @@ Context::GetRawTrackedDevicePoses(float fPredictedSecondsFromNow,
 	        .count();
 
 	xrt_device *devices[3] = {feed_head, feed_left, feed_right};
+	// Standable derives the T-pose arm angle from the controllers' positions
+	// relative to the head. WiVRn hands over stage-space poses, but Standable's
+	// reference is the room, so the head's gaze yaw must be removed or the arm
+	// axis reads rotated (WayVR shows the same offset until recentered).
+	// LH_FEED_GYRO_YAW (default on) rotates the controllers by the inverse of
+	// the head yaw, about the head, so the arm line is measured in room space.
+	static const bool feed_gyro_yaw = std::getenv("LH_FEED_NO_GYRO_YAW") == nullptr;
+	static const bool feed_head_yaw = std::getenv("LH_FEED_HEAD_YAW") != nullptr;
+	static const bool feed_head_flip = std::getenv("LH_FEED_HEAD_FLIP") != nullptr;
+	static const bool feed_frame_flip = std::getenv("LH_FEED_FRAME_FLIP") != nullptr;
+	static const bool feed_debug = std::getenv("LH_FEED_DEBUG") != nullptr;
 	const xrt_input_name inputs[3] = {XRT_INPUT_GENERIC_HEAD_POSE, XRT_INPUT_TOUCH_GRIP_POSE, XRT_INPUT_TOUCH_GRIP_POSE};
 
 	// The stevr VR runtime feeds the driver a copy of the last pose it saw
@@ -588,6 +599,56 @@ Context::GetRawTrackedDevicePoses(float fPredictedSecondsFromNow,
 		if ((rel.relation_flags & XRT_SPACE_RELATION_POSITION_VALID_BIT) == 0 &&
 		    (rel.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) == 0)
 			continue;
+
+		// WiVRn's space has forward +Z relative to OpenVR's -Z, so the whole
+		// frame handed to the driver is 180 deg about Y. Apply it to head AND
+		// controllers, position and orientation together: Standable's guards
+		// (xmm7 arm angle, xmm14/bl head axes) only agree with SteamVR when the
+		// entire frame matches. Matches the measured SteamVR sign pattern.
+		if (feed_frame_flip) {
+			rel.pose.position.x = -rel.pose.position.x;
+			rel.pose.position.z = -rel.pose.position.z;
+			xrt_quat flip = {0, 1, 0, 0}; // 180 deg about Y
+			math_quat_rotate(&rel.pose.orientation, &flip, &rel.pose.orientation);
+		}
+
+		// Express each controller relative to the head with the head's yaw
+		// removed, so Standable measures the arm line in room space.
+		if ((i > 0 || feed_head_yaw) && feed_gyro_yaw && feed_head != nullptr) {
+			xrt_space_relation hr = {};
+			if (xrt_device_get_tracked_pose(feed_head, XRT_INPUT_GENERIC_HEAD_POSE, time, &hr) ==
+			    XRT_SUCCESS) {
+				// head yaw from the quaternion. Monado/XRT forward is -Z, so the
+				// yaw is measured from the -Z axis (atan2(-fx, -fz)); using +Z
+				// leaves the arm axis 90 deg off.
+				const float fx = -2.0f * (hr.pose.orientation.x * hr.pose.orientation.z +
+				                          hr.pose.orientation.w * hr.pose.orientation.y);
+				const float fz = -(1.0f - 2.0f * (hr.pose.orientation.x * hr.pose.orientation.x +
+				                                  hr.pose.orientation.y * hr.pose.orientation.y));
+				const float yaw = atan2f(-fx, -fz);
+				const float a = -yaw;
+				const float c = cosf(a), s = sinf(a);
+				const float px = rel.pose.position.x - hr.pose.position.x;
+				const float pz = rel.pose.position.z - hr.pose.position.z;
+				rel.pose.position.x = hr.pose.position.x + (c * px - s * pz);
+				rel.pose.position.z = hr.pose.position.z + (s * px + c * pz);
+				xrt_quat yq = {0, sinf(a * 0.5f), 0, cosf(a * 0.5f)};
+				math_quat_rotate(&rel.pose.orientation, &yq, &rel.pose.orientation);
+			}
+		}
+
+		if (feed_debug) {
+			U_LOG_I("steamvr_lh: feed[%u] pos=(%f %f %f) flags=0x%x", i, rel.pose.position.x,
+			        rel.pose.position.y, rel.pose.position.z, rel.relation_flags);
+		}
+
+		// WiVRn's head forward is +Z while OpenVR/SteamVR expects -Z, so the
+		// orientation handed to the driver is 180 deg about Y. Superseded by
+		// feed_frame_flip (which flips head and controllers together).
+		if (i == 0 && feed_head_flip) {
+			xrt_quat flip = {0, 1, 0, 0}; // 180 deg about Y
+			math_quat_rotate(&rel.pose.orientation, &flip, &rel.pose.orientation);
+		}
 
 		xrt_matrix_3x3 rot = {};
 		math_matrix_3x3_from_quat(&rel.pose.orientation, &rot);

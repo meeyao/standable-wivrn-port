@@ -1,179 +1,134 @@
 #!/usr/bin/env bash
-# Switch the OpenXR and OpenVR runtimes between WiVRn and SteamVR.
+# vrswitch - switch between WiVRn and SteamVR (OpenXR + OpenVR runtimes)
+#
+#   vrswitch wivrn     point OpenXR/OpenVR at WiVRn (xrizer), start the WiVRn service
+#   vrswitch steamvr   stop WiVRn, point OpenXR/OpenVR at SteamVR, launch SteamVR
+#   vrswitch status    show which runtime is active (default)
 set -euo pipefail
 
-XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
-XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
-OPENXR_DIR="$XDG_CONFIG_HOME/openxr/1"
-OPENVR_DIR="$XDG_CONFIG_HOME/openvr"
-ACTIVE_RUNTIME="$OPENXR_DIR/active_runtime.json"
-OPENVRPATHS="$OPENVR_DIR/openvrpaths.vrpath"
-
-WIVRN_OPENXR="/usr/share/openxr/1/openxr_wivrn.json"
+RUNTIME_LINK="$HOME/.config/openxr/1/active_runtime.json"
+WIVRN_MANIFEST="/usr/share/openxr/1/openxr_wivrn.json"
+STEAMVR_DIR="$HOME/.local/share/Steam/steamapps/common/SteamVR"
+STEAMVR_MANIFEST="$STEAMVR_DIR/steamxr_linux64.json"
+OPENVR_PATHS="$HOME/.config/openvr/openvrpaths.vrpath"
 XRIZER_DIR="/opt/xrizer"
+STEAMVR_APPID="250820"
 
-say()  { printf '%s\n' "$*"; }
-warn() { printf 'warning: %s\n' "$*" >&2; }
-die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
+die() { echo "error: $*" >&2; exit 1; }
 
-require() { command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"; }
-
-# This drives the user's session bus and reads the user's OpenXR/OpenVR config,
-# so it must not run as root.
-if [ "$(id -u)" -eq 0 ]; then
-    die "run as your normal user, not root/sudo"
-fi
-
-usage() {
-    cat <<'EOF'
-Usage: vrswitch <wivrn|steamvr|status>
-
-  wivrn     stop SteamVR, kill stray ignition_server, point OpenXR/OpenVR at
-            WiVRn + xrizer, (re)start wivrn.service
-  steamvr   stop wivrn, kill stray ignition_server, point OpenXR/OpenVR at
-            SteamVR, launch SteamVR
-  status    print the current runtimes and service state
-EOF
+current() {
+  local target
+  target="$(readlink -f "$RUNTIME_LINK" 2>/dev/null || true)"
+  case "$target" in
+    "$(readlink -f "$WIVRN_MANIFEST")")   echo "wivrn" ;;
+    "$(readlink -f "$STEAMVR_MANIFEST")") echo "steamvr" ;;
+    "")                                   echo "unset" ;;
+    *)                                    echo "unknown ($target)" ;;
+  esac
 }
 
-kill_ignition() {
-    # Standable's ignition_server.exe survives its host runtime shutting down and
-    # then holds the bridge, so the next runtime's shim fails with "error 305".
-    pkill -f "ignition_server" >/dev/null 2>&1 || true
-    sleep 1
+current_openvr() {
+  [ -f "$OPENVR_PATHS" ] || { echo "unset"; return; }
+  python3 - "$OPENVR_PATHS" <<'PY' 2>/dev/null || echo "unknown"
+import json,sys
+print(json.load(open(sys.argv[1])).get("runtime",["?"])[0])
+PY
+}
+
+# Point the global OpenVR runtime at a directory. xrizer owns it by default,
+# which makes SteamVR's own binaries (vrmonitor/vrserver) load xrizer and crash.
+set_openvr_runtime() {
+  local dir="$1"
+  [ -f "$OPENVR_PATHS" ] || return 0
+  python3 - "$OPENVR_PATHS" "$dir" <<'PY'
+import json,sys
+p,d=sys.argv[1],sys.argv[2]
+cfg=json.load(open(p))
+cfg["runtime"]=[d]
+json.dump(cfg,open(p,"w"),indent=1)
+PY
 }
 
 stop_steamvr() {
-    pkill -f "SteamVR/bin/linux64/vrmonitor" >/dev/null 2>&1 || true
-    pkill -f "SteamVR/bin/linux64/vrserver" >/dev/null 2>&1 || true
-    sleep 1
+  pkill -f "SteamVR/bin/linux64/vrmonitor" 2>/dev/null || true
+  pkill -f "SteamVR/bin/linux64/vrserver"  2>/dev/null || true
+  sleep 1
 }
 
-detect_steam_root() {
-    local c
-    for c in \
-        "$XDG_DATA_HOME/Steam" \
-        "$HOME/.local/share/Steam" \
-        "$HOME/.steam/steam" \
-        "$HOME/.steam/root" \
-        "$HOME/.var/app/com.valvesoftware.Steam/data/Steam"; do
-        if [ -d "$c/steamapps" ]; then printf '%s\n' "$c"; return 0; fi
-    done
-    return 1
+# Standable's ignition_server.exe survives its host runtime shutting down and
+# then holds the bridge, so the other runtime's shim fails with "error 305".
+kill_ignition() {
+  pkill -f "ignition_server" 2>/dev/null || true
+  sleep 1
 }
 
-detect_steamvr() {
-    local root vdf lib
-    root="$(detect_steam_root)" || return 1
-    local libs=("$root")
-    vdf="$root/steamapps/libraryfolders.vdf"
-    if [ -f "$vdf" ]; then
-        while IFS= read -r lib; do
-            [ -n "$lib" ] && libs+=("$lib")
-        done < <(grep -o '"path"[[:space:]]*"[^"]*"' "$vdf" | sed 's/.*"\(.*\)"$/\1/')
-    fi
-    for lib in "${libs[@]}"; do
-        if [ -d "$lib/steamapps/common/SteamVR" ]; then
-            printf '%s\n' "$lib/steamapps/common/SteamVR"
-            return 0
-        fi
-    done
-    return 1
-}
-
-set_openvr_runtime() {
-    local path="$1" f="$OPENVRPATHS"
-    require python3
-    mkdir -p "$OPENVR_DIR"
-    if [ ! -f "$f" ]; then
-        printf '{\n   "config" : [],\n   "external_drivers" : null,\n   "jsonid" : "vrpathreg",\n   "log" : [],\n   "runtime" : [],\n   "version" : 1\n}\n' >"$f"
-    fi
-    python3 - "$f" "$path" <<'PY'
+# The Standable launcher and Proton rewrite openvrpaths.vrpath and can drop the
+# host reaction_drivers list, which makes SteamVR silently skip the drivers.
+# Re-add the ones that are installed before every SteamVR switch.
+ensure_external_drivers() {
+  [ -f "$OPENVR_PATHS" ] || return 0
+  local common="$HOME/.local/share/Steam/steamapps/common"
+  local d
+  for d in SlimeVR "Standable Full Body Estimation"; do
+    [ -f "$common/$d/driver.vrdrivermanifest" ] && printf '%s\n' "$common/$d"
+  done | python3 - "$OPENVR_PATHS" <<'PY'
 import json, sys
-f, p = sys.argv[1], sys.argv[2]
-with open(f) as fh:
-    d = json.load(fh)
-d["runtime"] = [p]
-with open(f, "w") as fh:
-    json.dump(d, fh, indent=3)
+p = sys.argv[1]
+want = [l.strip() for l in sys.stdin if l.strip()]
+d = json.load(open(p))
+cur = [x for x in (d.get("external_drivers") or []) if not x.startswith("S:\\\\")]
+merged = want + [x for x in cur if x not in want]
+if merged != (d.get("external_drivers") or []):
+    d["external_drivers"] = merged
+    json.dump(d, open(p, "w"), indent=2)
+    print("external_drivers restored:", merged)
 PY
 }
 
-get_openvr_runtime() {
-    local f="$OPENVRPATHS"
-    [ -f "$f" ] || { printf '%s\n' "(unset)"; return 0; }
-    python3 - "$f" <<'PY'
-import json, sys
-try:
-    with open(sys.argv[1]) as fh:
-        r = json.load(fh).get("runtime") or []
-    print(r[0] if r else "(unset)")
-except Exception:
-    print("(unset)")
-PY
+start_steamvr() {
+  command -v steam >/dev/null 2>&1 || die "steam command not found"
+  nohup steam "steam://rungameid/$STEAMVR_APPID" >/dev/null 2>&1 &
 }
 
-cmd_wivrn() {
-    say "switching to WiVRn"
+case "${1:-status}" in
+  wivrn|w)
+    # Set the runtime first: if a cleanup step stalls, the critical state is
+    # already correct instead of half-switched.
+    ln -sfn "$WIVRN_MANIFEST" "$RUNTIME_LINK"
+    set_openvr_runtime "$XRIZER_DIR"
+    systemctl --user reset-failed wivrn.service 2>/dev/null || true
     stop_steamvr
     kill_ignition
-    mkdir -p "$OPENXR_DIR"
-    ln -sfn "$WIVRN_OPENXR" "$ACTIVE_RUNTIME"
-    set_openvr_runtime "$XRIZER_DIR"
-    systemctl --user stop wivrn.service >/dev/null 2>&1 || true
-    systemctl --user reset-failed wivrn.service >/dev/null 2>&1 || true
     systemctl --user start wivrn.service
-    say "OpenXR -> $WIVRN_OPENXR"
-    say "OpenVR -> $XRIZER_DIR"
-}
-
-cmd_steamvr() {
-    say "switching to SteamVR"
-    systemctl --user stop wivrn.service >/dev/null 2>&1 || true
-    pkill -f wivrn-server >/dev/null 2>&1 || true
-    systemctl --user reset-failed wivrn.service >/dev/null 2>&1 || true
+    echo "OpenXR -> WiVRn, OpenVR -> xrizer (service started)"
+    ;;
+  steamvr|s|steam)
+    # Runtime + drivers first (critical), cleanup last (best-effort).
+    ensure_external_drivers
+    ln -sfn "$STEAMVR_MANIFEST" "$RUNTIME_LINK"
+    set_openvr_runtime "$STEAMVR_DIR"
+    systemctl --user stop wivrn.service 2>/dev/null || true
+    pkill -x wivrn-server 2>/dev/null || true
+    systemctl --user reset-failed wivrn.service 2>/dev/null || true
     kill_ignition
-    local steamvr
-    steamvr="$(detect_steamvr)" || die "SteamVR not found in any Steam library"
-    mkdir -p "$OPENXR_DIR"
-    ln -sfn "$steamvr/steamxr_linux64.json" "$ACTIVE_RUNTIME"
-    set_openvr_runtime "$steamvr"
-    if command -v xdg-open >/dev/null 2>&1; then
-        ( xdg-open 'steam://rungameid/250820' >/dev/null 2>&1 & ) || true
-    elif command -v steam >/dev/null 2>&1; then
-        ( steam 'steam://rungameid/250820' >/dev/null 2>&1 & ) || true
+    start_steamvr
+    echo "OpenXR -> SteamVR, OpenVR -> SteamVR (launching)"
+    ;;
+  status|st|"")
+    echo "OpenXR runtime: $(current)"
+    echo "OpenVR runtime: $(current_openvr)"
+    printf "WiVRn service:  %s\n" "$(systemctl --user show -p ActiveState --value wivrn.service 2>/dev/null)"
+    if pgrep -f "SteamVR/bin/linux64/vrmonitor" >/dev/null 2>&1; then
+      echo "SteamVR:        running"
     else
-        warn "cannot launch Steam; start SteamVR manually"
+      echo "SteamVR:        not running"
     fi
-    say "OpenXR -> $steamvr/steamxr_linux64.json"
-    say "OpenVR -> $steamvr"
-}
-
-cmd_status() {
-    local oxr ovr state vrm
-    if [ -e "$ACTIVE_RUNTIME" ]; then
-        oxr="$(readlink -f "$ACTIVE_RUNTIME" 2>/dev/null || readlink "$ACTIVE_RUNTIME")"
-    else
-        oxr="(unset)"
-    fi
-    ovr="$(get_openvr_runtime)"
-    if command -v systemctl >/dev/null 2>&1; then
-        state="$(systemctl --user show -p ActiveState --value wivrn.service 2>/dev/null || true)"
-        [ -n "$state" ] || state="unknown"
-    else
-        state="unknown"
-    fi
-    if pgrep -f vrmonitor >/dev/null 2>&1; then vrm="running"; else vrm="not running"; fi
-    printf 'OpenXR runtime: %s\n' "$oxr"
-    printf 'OpenVR runtime: %s\n' "$ovr"
-    printf 'wivrn.service:  %s\n' "$state"
-    printf 'vrmonitor:      %s\n' "$vrm"
-}
-
-case "${1:-}" in
-    wivrn)   cmd_wivrn ;;
-    steamvr) cmd_steamvr ;;
-    status)  cmd_status ;;
-    ""|-h|--help) usage ;;
-    *) die "unknown command: $1 (try --help)" ;;
+    ;;
+  -h|--help|help)
+    sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'
+    ;;
+  *)
+    echo "usage: vrswitch [wivrn|steamvr|status]" >&2
+    exit 2
+    ;;
 esac
