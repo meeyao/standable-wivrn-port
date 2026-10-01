@@ -4,15 +4,8 @@
 set -euo pipefail
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-
-# When run through sudo, $HOME belongs to root; use the invoking user's home.
-INVOKING_USER="${SUDO_USER:-$(id -un)}"
-if [ "$INVOKING_USER" = "root" ]; then
-    INVOKING_HOME="$HOME"
-else
-    INVOKING_HOME="$(getent passwd "$INVOKING_USER" | cut -d: -f6)"
-    [ -n "$INVOKING_HOME" ] || INVOKING_HOME="$HOME"
-fi
+# shellcheck disable=SC1091
+. "$REPO_DIR/tools/lib.sh"
 
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$INVOKING_HOME/.config}"
 XDG_CACHE_HOME="${XDG_CACHE_HOME:-$INVOKING_HOME/.cache}"
@@ -24,10 +17,6 @@ OPENXR_DIR="/usr/share/openxr/1"
 DROPIN="$XDG_CONFIG_HOME/systemd/user/wivrn.service.d/standable.conf"
 
 RUN_PORT_UNINSTALL=0
-
-say()  { printf '==> %s\n' "$*"; }
-warn() { printf 'warning: %s\n' "$*" >&2; }
-die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
 
 usage() {
     cat <<'EOF'
@@ -46,23 +35,6 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
-
-SUDO=""
-if [ "$(id -u)" -ne 0 ]; then
-    command -v sudo >/dev/null 2>&1 || die "sudo required"
-    SUDO="sudo"
-fi
-run_root() { if [ -n "$SUDO" ]; then $SUDO "$@"; else "$@"; fi; }
-
-# systemctl --user must run as the invoking user, on their session bus.
-user_systemctl() {
-    if [ "$(id -u)" -eq 0 ] && [ "$INVOKING_USER" != "root" ] && command -v runuser >/dev/null 2>&1; then
-        XDG_RUNTIME_DIR="/run/user/$(id -u "$INVOKING_USER")" \
-            runuser -u "$INVOKING_USER" -- systemctl --user "$@"
-    else
-        systemctl --user "$@"
-    fi
-}
 
 say "stopping wivrn.service"
 if command -v systemctl >/dev/null 2>&1; then

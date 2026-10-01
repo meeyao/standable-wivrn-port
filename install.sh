@@ -7,17 +7,8 @@
 set -euo pipefail
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-
-# When invoked through sudo, $HOME and the XDG vars belong to root, not to the
-# user who owns the WiVRn/Steam setup. Resolve the invoking user's home so the
-# systemd drop-in and caches land in the right place.
-INVOKING_USER="${SUDO_USER:-$(id -un)}"
-if [ "$INVOKING_USER" = "root" ]; then
-    INVOKING_HOME="$HOME"
-else
-    INVOKING_HOME="$(getent passwd "$INVOKING_USER" | cut -d: -f6)"
-    [ -n "$INVOKING_HOME" ] || INVOKING_HOME="$HOME"
-fi
+# shellcheck disable=SC1091
+. "$REPO_DIR/tools/lib.sh"
 
 # --- overridable configuration ---------------------------------------------
 PORT_INSTALLER_REPO="${PORT_INSTALLER_REPO:-https://github.com/meeyao/standable-linux-port}"
@@ -34,19 +25,13 @@ CACHE_DIR="$XDG_CACHE_HOME/standable-wivrn-port"
 WIVRN_LIBDIR="/usr/lib/wivrn"
 WIVRN_BINDIR="/usr/bin"
 OPENXR_DIR="/usr/share/openxr/1"
+REAPER_SRC="$REPO_DIR/tools/reap-ignition.sh"
+REAPER_BIN="/usr/local/bin/reap-ignition"
 
 MODE="prebuilt"
 SKIP_PORT_INSTALLER=0
 
 # --- output helpers ---------------------------------------------------------
-say()  { printf '==> %s\n' "$*"; }
-warn() { printf 'warning: %s\n' "$*" >&2; }
-die()  { printf 'error: %s\n' "$*" >&2; exit 1; }
-
-require() {
-    command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
-}
-
 usage() {
     cat <<'EOF'
 Usage: install.sh [options]
@@ -65,42 +50,7 @@ Environment:
 EOF
 }
 
-# --- root handling ----------------------------------------------------------
-SUDO=""
-if [ "$(id -u)" -ne 0 ]; then
-    require sudo
-    SUDO="sudo"
-fi
-run_root() { if [ -n "$SUDO" ]; then $SUDO "$@"; else "$@"; fi; }
-
 # --- path discovery ---------------------------------------------------------
-detect_steam_root() {
-    local c
-    for c in \
-        "$XDG_DATA_HOME/Steam" \
-        "$HOME/.local/share/Steam" \
-        "$HOME/.steam/steam" \
-        "$HOME/.steam/root" \
-        "$HOME/.var/app/com.valvesoftware.Steam/data/Steam"; do
-        if [ -d "$c/steamapps" ]; then printf '%s\n' "$c"; return 0; fi
-    done
-    return 1
-}
-
-detect_libraries() {
-    local root vdf
-    root="$(detect_steam_root)" || return 0
-    vdf="$root/steamapps/libraryfolders.vdf"
-    [ -f "$vdf" ] || return 0
-    grep -o '"path"[[:space:]]*"[^"]*"' "$vdf" | sed 's/.*"\(.*\)"$/\1/'
-}
-
-bak() {
-    local f="$1"
-    [ -e "$f" ] || return 0
-    [ -e "$f.bak" ] || cp -a "$f" "$f.bak"
-}
-
 detect_distro() {
     local id="" like=""
     if [ -r /etc/os-release ]; then
@@ -265,6 +215,13 @@ install_source() {
 # Runs on behalf of the invoking user: when this script runs as root (sudo), the
 # drop-in must live in that user's config dir, owned by them, and systemctl must
 # talk to their user bus.
+install_reaper() {
+    [ -f "$REAPER_SRC" ] || die "missing reaper: $REAPER_SRC"
+    say "reaper: $REAPER_BIN"
+    run_root install -d "$(dirname "$REAPER_BIN")"
+    run_root install -m 0755 "$REAPER_SRC" "$REAPER_BIN"
+}
+
 install_dropin() {
     local dir="$XDG_CONFIG_HOME/systemd/user/wivrn.service.d"
     local f="$dir/standable.conf"
@@ -274,34 +231,56 @@ install_dropin() {
     else
         mkdir -p "$dir"
     fi
-    [ -e "$f" ] || : >"$f"
-    # Write through the invoking user so the file is not root-owned.
-    local write="$f"
+    # Write once to a temp file, then place it through the invoking user so the
+    # file is not root-owned.
+    local tmp
+    tmp="$(mktemp)"
+    cat >"$tmp" <<'EOF'
+[Service]
+Environment=WIVRN_USE_STEAMVR_LH=1
+Environment=LH_LOAD_STANDABLE=1
+Environment=LH_LOAD_LIGHTHOUSE=0
+Environment=LH_DISCOVER_WAIT_MS=30000
+# Best-effort shim cleanup on start; the timer handles mid-session orphans.
+ExecStartPre=-/usr/local/bin/reap-ignition --quiet --kill
+ExecStopPost=-/usr/local/bin/reap-ignition --quiet --kill
+EOF
     if [ "$(id -u)" -eq 0 ] && [ "$INVOKING_USER" != "root" ]; then
-        runuser -u "$INVOKING_USER" -- tee "$write" >/dev/null <<'EOF'
-[Service]
-Environment=WIVRN_USE_STEAMVR_LH=1
-Environment=LH_LOAD_STANDABLE=1
-Environment=LH_LOAD_LIGHTHOUSE=0
-Environment=LH_DISCOVER_WAIT_MS=30000
-EOF
+        runuser -u "$INVOKING_USER" -- cp "$tmp" "$f"
     else
-        cat >"$write" <<'EOF'
-[Service]
-Environment=WIVRN_USE_STEAMVR_LH=1
-Environment=LH_LOAD_STANDABLE=1
-Environment=LH_LOAD_LIGHTHOUSE=0
-Environment=LH_DISCOVER_WAIT_MS=30000
-EOF
+        cp "$tmp" "$f"
     fi
+    rm -f "$tmp"
+    # Periodic orphan sweeper: ignition_server.exe survives its host and piles
+    # up across restarts (Ignition driver.cpp forks without reaping). The timer
+    # keeps removing shims/wineservers that are not in the live wivrn-server
+    # tree, without touching an active session.
+    local tdir="$XDG_CONFIG_HOME/systemd/user"
+    mkdir -p "$tdir"
+    cat >"$tdir/wivrn-reap.service" <<'EOF'
+[Unit]
+Description=Reap orphaned Standable/Ignition shim processes
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/reap-ignition --quiet --kill
+EOF
+    cat >"$tdir/wivrn-reap.timer" <<'EOF'
+[Unit]
+Description=Periodically reap orphaned Standable/Ignition shims
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=30s
+AccuracySec=5s
+
+[Install]
+WantedBy=timers.target
+EOF
+
     if command -v systemctl >/dev/null 2>&1; then
-        # systemctl --user needs the invoking user's session bus.
-        if [ "$(id -u)" -eq 0 ] && [ "$INVOKING_USER" != "root" ] && command -v runuser >/dev/null 2>&1; then
-            XDG_RUNTIME_DIR="/run/user/$(id -u "$INVOKING_USER")" \
-                runuser -u "$INVOKING_USER" -- systemctl --user daemon-reload || true
-        else
-            systemctl --user daemon-reload || true
-        fi
+        user_systemctl daemon-reload || true
+        user_systemctl enable --now wivrn-reap.timer || true
     fi
 }
 
@@ -351,5 +330,6 @@ else
     install_source
 fi
 
+install_reaper
 install_dropin
 print_next_steps

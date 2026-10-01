@@ -566,9 +566,18 @@ Context::GetRawTrackedDevicePoses(float fPredictedSecondsFromNow,
 	// the head yaw, about the head, so the arm line is measured in room space.
 	static const bool feed_gyro_yaw = std::getenv("LH_FEED_NO_GYRO_YAW") == nullptr;
 	static const bool feed_head_yaw = std::getenv("LH_FEED_HEAD_YAW") != nullptr;
-	static const bool feed_head_flip = std::getenv("LH_FEED_HEAD_FLIP") != nullptr;
 	static const bool feed_frame_flip = std::getenv("LH_FEED_FRAME_FLIP") != nullptr;
 	static const bool feed_debug = std::getenv("LH_FEED_DEBUG") != nullptr;
+	// OpenVR's HmdMatrix34_t is row-major, and math_matrix_3x3_from_quat stores
+	// its result row-major too (v[0..2] = row 0), exactly as monado's own
+	// t_openvr_tracker consumes OpenVR matrices. The original feed indexed it
+	// column-major (transposing the rotation), which handed Standable the
+	// inverse orientation and made its controller +Y test (the "bl" T-pose
+	// guard) fail. LH_FEED_MATRIX_LEGACY restores the transposed layout.
+	static const bool feed_matrix_legacy = std::getenv("LH_FEED_MATRIX_LEGACY") != nullptr;
+	// Drop the linear/angular velocities Standable might fold into its
+	// per-device derived fields (the +0x50 investigation).
+	static const bool feed_zero_vel = std::getenv("LH_FEED_NO_VEL") != nullptr;
 	const xrt_input_name inputs[3] = {XRT_INPUT_GENERIC_HEAD_POSE, XRT_INPUT_TOUCH_GRIP_POSE, XRT_INPUT_TOUCH_GRIP_POSE};
 
 	// The stevr VR runtime feeds the driver a copy of the last pose it saw
@@ -642,20 +651,17 @@ Context::GetRawTrackedDevicePoses(float fPredictedSecondsFromNow,
 			        rel.pose.position.y, rel.pose.position.z, rel.relation_flags);
 		}
 
-		// WiVRn's head forward is +Z while OpenVR/SteamVR expects -Z, so the
-		// orientation handed to the driver is 180 deg about Y. Superseded by
-		// feed_frame_flip (which flips head and controllers together).
-		if (i == 0 && feed_head_flip) {
-			xrt_quat flip = {0, 1, 0, 0}; // 180 deg about Y
-			math_quat_rotate(&rel.pose.orientation, &flip, &rel.pose.orientation);
-		}
-
 		xrt_matrix_3x3 rot = {};
 		math_matrix_3x3_from_quat(&rel.pose.orientation, &rot);
+		// Row-major (row i = v[i*3..i*3+2]), matching monado's
+		// t_openvr_tracker; the legacy layout transposed it.
+		static const int row_major[9] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
+		static const int legacy[9] = {0, 3, 6, 1, 4, 7, 2, 5, 8};
+		const int *idx = feed_matrix_legacy ? legacy : row_major;
 		pTrackedDevicePoseArray[i].mDeviceToAbsoluteTracking = {{
-		    {rot.v[0], rot.v[3], rot.v[6], rel.pose.position.x},
-		    {rot.v[1], rot.v[4], rot.v[7], rel.pose.position.y},
-		    {rot.v[2], rot.v[5], rot.v[8], rel.pose.position.z},
+		    {rot.v[idx[0]], rot.v[idx[1]], rot.v[idx[2]], rel.pose.position.x},
+		    {rot.v[idx[3]], rot.v[idx[4]], rot.v[idx[5]], rel.pose.position.y},
+		    {rot.v[idx[6]], rot.v[idx[7]], rot.v[idx[8]], rel.pose.position.z},
 		}};
 		pTrackedDevicePoseArray[i].bPoseIsValid = true;
 		pTrackedDevicePoseArray[i].bDeviceIsConnected = true;
@@ -664,12 +670,12 @@ Context::GetRawTrackedDevicePoses(float fPredictedSecondsFromNow,
 		// SteamVR drivers report device velocities; consumers such as Standable
 		// derive motion from them. WiVRn devices already carry these in the
 		// space relation, so pass them through instead of dropping them.
-		if (rel.relation_flags & XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT) {
+		if (!feed_zero_vel && (rel.relation_flags & XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT)) {
 			pTrackedDevicePoseArray[i].vVelocity.v[0] = rel.linear_velocity.x;
 			pTrackedDevicePoseArray[i].vVelocity.v[1] = rel.linear_velocity.y;
 			pTrackedDevicePoseArray[i].vVelocity.v[2] = rel.linear_velocity.z;
 		}
-		if (rel.relation_flags & XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT) {
+		if (!feed_zero_vel && (rel.relation_flags & XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT)) {
 			pTrackedDevicePoseArray[i].vAngularVelocity.v[0] = rel.angular_velocity.x;
 			pTrackedDevicePoseArray[i].vAngularVelocity.v[1] = rel.angular_velocity.y;
 			pTrackedDevicePoseArray[i].vAngularVelocity.v[2] = rel.angular_velocity.z;

@@ -32,7 +32,7 @@ index 20a1fc12b..184e4f3ec 100644
  	wait_for_discover();
  
 diff --git a/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp b/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
-index 8346bedee..02baab955 100644
+index 8346bedee..e945a5a7e 100644
 --- a/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
 +++ b/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
 @@ -34,6 +34,7 @@
@@ -43,7 +43,7 @@ index 8346bedee..02baab955 100644
  #include <cstring>
  #include <dlfcn.h>
  #include <memory>
-@@ -547,21 +548,133 @@ Context::GetRawTrackedDevicePoses(float fPredictedSecondsFromNow,
+@@ -547,21 +548,139 @@ Context::GetRawTrackedDevicePoses(float fPredictedSecondsFromNow,
                                    vr::TrackedDevicePose_t *pTrackedDevicePoseArray,
                                    uint32_t unTrackedDevicePoseArrayCount)
  {
@@ -76,9 +76,18 @@ index 8346bedee..02baab955 100644
 +	// the head yaw, about the head, so the arm line is measured in room space.
 +	static const bool feed_gyro_yaw = std::getenv("LH_FEED_NO_GYRO_YAW") == nullptr;
 +	static const bool feed_head_yaw = std::getenv("LH_FEED_HEAD_YAW") != nullptr;
-+	static const bool feed_head_flip = std::getenv("LH_FEED_HEAD_FLIP") != nullptr;
 +	static const bool feed_frame_flip = std::getenv("LH_FEED_FRAME_FLIP") != nullptr;
 +	static const bool feed_debug = std::getenv("LH_FEED_DEBUG") != nullptr;
++	// OpenVR's HmdMatrix34_t is row-major, and math_matrix_3x3_from_quat stores
++	// its result row-major too (v[0..2] = row 0), exactly as monado's own
++	// t_openvr_tracker consumes OpenVR matrices. The original feed indexed it
++	// column-major (transposing the rotation), which handed Standable the
++	// inverse orientation and made its controller +Y test (the "bl" T-pose
++	// guard) fail. LH_FEED_MATRIX_LEGACY restores the transposed layout.
++	static const bool feed_matrix_legacy = std::getenv("LH_FEED_MATRIX_LEGACY") != nullptr;
++	// Drop the linear/angular velocities Standable might fold into its
++	// per-device derived fields (the +0x50 investigation).
++	static const bool feed_zero_vel = std::getenv("LH_FEED_NO_VEL") != nullptr;
 +	const xrt_input_name inputs[3] = {XRT_INPUT_GENERIC_HEAD_POSE, XRT_INPUT_TOUCH_GRIP_POSE, XRT_INPUT_TOUCH_GRIP_POSE};
 +
 +	// The stevr VR runtime feeds the driver a copy of the last pose it saw
@@ -152,20 +161,17 @@ index 8346bedee..02baab955 100644
 +			        rel.pose.position.y, rel.pose.position.z, rel.relation_flags);
 +		}
 +
-+		// WiVRn's head forward is +Z while OpenVR/SteamVR expects -Z, so the
-+		// orientation handed to the driver is 180 deg about Y. Superseded by
-+		// feed_frame_flip (which flips head and controllers together).
-+		if (i == 0 && feed_head_flip) {
-+			xrt_quat flip = {0, 1, 0, 0}; // 180 deg about Y
-+			math_quat_rotate(&rel.pose.orientation, &flip, &rel.pose.orientation);
-+		}
-+
 +		xrt_matrix_3x3 rot = {};
 +		math_matrix_3x3_from_quat(&rel.pose.orientation, &rot);
++		// Row-major (row i = v[i*3..i*3+2]), matching monado's
++		// t_openvr_tracker; the legacy layout transposed it.
++		static const int row_major[9] = {0, 1, 2, 3, 4, 5, 6, 7, 8};
++		static const int legacy[9] = {0, 3, 6, 1, 4, 7, 2, 5, 8};
++		const int *idx = feed_matrix_legacy ? legacy : row_major;
 +		pTrackedDevicePoseArray[i].mDeviceToAbsoluteTracking = {{
-+		    {rot.v[0], rot.v[3], rot.v[6], rel.pose.position.x},
-+		    {rot.v[1], rot.v[4], rot.v[7], rel.pose.position.y},
-+		    {rot.v[2], rot.v[5], rot.v[8], rel.pose.position.z},
++		    {rot.v[idx[0]], rot.v[idx[1]], rot.v[idx[2]], rel.pose.position.x},
++		    {rot.v[idx[3]], rot.v[idx[4]], rot.v[idx[5]], rel.pose.position.y},
++		    {rot.v[idx[6]], rot.v[idx[7]], rot.v[idx[8]], rel.pose.position.z},
 +		}};
 +		pTrackedDevicePoseArray[i].bPoseIsValid = true;
 +		pTrackedDevicePoseArray[i].bDeviceIsConnected = true;
@@ -174,12 +180,12 @@ index 8346bedee..02baab955 100644
 +		// SteamVR drivers report device velocities; consumers such as Standable
 +		// derive motion from them. WiVRn devices already carry these in the
 +		// space relation, so pass them through instead of dropping them.
-+		if (rel.relation_flags & XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT) {
++		if (!feed_zero_vel && (rel.relation_flags & XRT_SPACE_RELATION_LINEAR_VELOCITY_VALID_BIT)) {
 +			pTrackedDevicePoseArray[i].vVelocity.v[0] = rel.linear_velocity.x;
 +			pTrackedDevicePoseArray[i].vVelocity.v[1] = rel.linear_velocity.y;
 +			pTrackedDevicePoseArray[i].vVelocity.v[2] = rel.linear_velocity.z;
 +		}
-+		if (rel.relation_flags & XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT) {
++		if (!feed_zero_vel && (rel.relation_flags & XRT_SPACE_RELATION_ANGULAR_VELOCITY_VALID_BIT)) {
 +			pTrackedDevicePoseArray[i].vAngularVelocity.v[0] = rel.angular_velocity.x;
 +			pTrackedDevicePoseArray[i].vAngularVelocity.v[1] = rel.angular_velocity.y;
 +			pTrackedDevicePoseArray[i].vAngularVelocity.v[2] = rel.angular_velocity.z;
@@ -188,7 +194,7 @@ index 8346bedee..02baab955 100644
  }
  
  void
-@@ -935,7 +1048,7 @@ Context::TrackedDeviceToPropertyContainer(vr::TrackedDeviceIndex_t nDevice)
+@@ -935,7 +1054,7 @@ Context::TrackedDeviceToPropertyContainer(vr::TrackedDeviceIndex_t nDevice)
  void
  Context::Log(const char *pchLogMessage)
  {
@@ -197,7 +203,7 @@ index 8346bedee..02baab955 100644
  }
  // NOLINTEND(bugprone-easily-swappable-parameters)
  
-@@ -984,6 +1097,94 @@ destroy(struct xrt_system_devices *xsysd)
+@@ -984,6 +1103,94 @@ destroy(struct xrt_system_devices *xsysd)
  	free(svrs);
  }
  
@@ -292,7 +298,7 @@ index 8346bedee..02baab955 100644
  extern "C" enum xrt_result
  steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out_xsysd)
  {
-@@ -1053,6 +1254,12 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
+@@ -1053,6 +1260,12 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
  	if (svrs->ctx == nullptr)
  		return xrt_result::XRT_ERROR_DEVICE_CREATION_FAILED;
  
@@ -305,7 +311,7 @@ index 8346bedee..02baab955 100644
  	U_LOG_IFL_I(level, "Lighthouse initialization complete, giving time to setup connected devices...");
  	// RunFrame needs to be called to detect controllers
  	svrs->ctx->wait_for_discover();
-@@ -1072,8 +1279,8 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
+@@ -1072,8 +1285,8 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
  	xsysd->create_body_tracker = b_body_tracker_create;
  	xsysd->create_hand_tracker = b_hand_tracker_create;
  
@@ -316,7 +322,7 @@ index 8346bedee..02baab955 100644
  		if (xp && svrs->ctx->hmd->variant == VIVE_VARIANT_PRO2 && !svrs->ctx->hmd->init_vive_pro_2(xp)) {
  			U_LOG_IFL_W(level, "Found Vive Pro 2, but failed to initialize.");
  		}
-@@ -1083,10 +1290,11 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
+@@ -1083,10 +1296,11 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
  		xsysd->static_roles.head = xsysd->static_xdevs[xsysd->static_xdev_count++];
  	}
  
@@ -331,7 +337,7 @@ index 8346bedee..02baab955 100644
  		}
  	}
  
-@@ -1094,3 +1302,16 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
+@@ -1094,3 +1308,16 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
  
  	return xrt_result::XRT_SUCCESS;
  }

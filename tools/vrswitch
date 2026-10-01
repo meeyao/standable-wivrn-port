@@ -57,8 +57,13 @@ stop_steamvr() {
 
 # Standable's ignition_server.exe survives its host runtime shutting down and
 # then holds the bridge, so the other runtime's shim fails with "error 305".
+# The repo's reap-ignition does this without touching a live session.
 kill_ignition() {
-  pkill -f "ignition_server" 2>/dev/null || true
+  if command -v reap-ignition >/dev/null 2>&1; then
+    reap-ignition --quiet --kill || true
+  else
+    pkill -f "ignition_server" 2>/dev/null || true
+  fi
   sleep 1
 }
 
