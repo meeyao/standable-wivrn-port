@@ -559,12 +559,12 @@ Context::GetRawTrackedDevicePoses(float fPredictedSecondsFromNow,
 
 	xrt_device *devices[3] = {feed_head, feed_left, feed_right};
 	// Standable derives the T-pose arm angle from the controllers' positions
-	// relative to the head. WiVRn hands over stage-space poses, but Standable's
-	// reference is the room, so the head's gaze yaw must be removed or the arm
-	// axis reads rotated (WayVR shows the same offset until recentered).
-	// LH_FEED_GYRO_YAW (default on) rotates the controllers by the inverse of
-	// the head yaw, about the head, so the arm line is measured in room space.
-	static const bool feed_gyro_yaw = std::getenv("LH_FEED_NO_GYRO_YAW") == nullptr;
+	// relative to the head. Dynamic head-yaw removal is OFF by default: it
+	// rotates the arm line on head turns, which lets a front-back pose pass
+	// as a T-pose (capturing a 90-degree-rotated reference) while twisting a
+	// true side-side pose. Like SteamVR, the head must face the torso.
+	// LH_FEED_GYRO_YAW=1 re-enables the experimental removal.
+	static const bool feed_gyro_yaw = std::getenv("LH_FEED_GYRO_YAW") != nullptr;
 	static const bool feed_head_yaw = std::getenv("LH_FEED_HEAD_YAW") != nullptr;
 	static const bool feed_frame_flip = std::getenv("LH_FEED_FRAME_FLIP") != nullptr;
 	static const bool feed_debug = std::getenv("LH_FEED_DEBUG") != nullptr;
