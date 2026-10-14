@@ -1,3 +1,12 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Standable Port <139587960+meeyao@users.noreply.github.com>
+Date: Tue, 14 Oct 2026 12:00:00 +0400
+Subject: [PATCH] d/steamvr_lh: host device pose feed for hosted drivers
+
+Feeds WiVRn HMD + controller poses to hosted SteamVR drivers through
+GetRawTrackedDevicePoses (row-major matrices), so the real Standable FBE
+driver estimates under WiVRn without SteamVR.
+
 diff --git a/src/xrt/drivers/steamvr_lh/interfaces/context.hpp b/src/xrt/drivers/steamvr_lh/interfaces/context.hpp
 index 20a1fc12b..184e4f3ec 100644
 --- a/src/xrt/drivers/steamvr_lh/interfaces/context.hpp
