@@ -246,8 +246,12 @@ Environment=LH_DISCOVER_WAIT_MS=30000
 # same-tree rebuild + redeploy of wivrn-server and both .so libs.
 Environment=IPC_IGNORE_VERSION=1
 # Best-effort shim cleanup on start; the timer handles mid-session orphans.
-ExecStartPre=-/usr/local/bin/reap-ignition --quiet --kill
-ExecStopPost=-/usr/local/bin/reap-ignition --quiet --kill
+# PAUSED: reap-ignition treats any non-wivrn-server ignition/wineserver as an
+# orphan, so it kill -9s the live Standable server under SteamVR
+# (no wivrn-server to protect the tree) -> shm teardown / error 105.
+# Re-enable once the reaper protects a live vrserver/vrmonitor tree.
+#ExecStartPre=-/usr/local/bin/reap-ignition --quiet --kill
+#ExecStopPost=-/usr/local/bin/reap-ignition --quiet --kill
 EOF
     if [ "$(id -u)" -eq 0 ] && [ "$INVOKING_USER" != "root" ]; then
         runuser -u "$INVOKING_USER" -- cp "$tmp" "$f"
@@ -284,7 +288,10 @@ EOF
 
     if command -v systemctl >/dev/null 2>&1; then
         user_systemctl daemon-reload || true
-        user_systemctl enable --now wivrn-reap.timer || true
+        # Timer left disabled on purpose (same reason as above): it would reap
+        # the live Standable server under SteamVR. Enable manually once the
+        # reaper is SteamVR-aware.
+        say "wivrn-reap.timer installed but NOT enabled (see above)"
     fi
 }
 
@@ -293,13 +300,80 @@ print_next_steps() {
 
 Done.
 
+VRChat launch options (Steam -> Properties -> General), exact:
+  IPC_IGNORE_VERSION=1 PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_SERIALS="Hips;Chest;Elbow Left;Elbow Right;Knee Left;Knee Right;Foot Left;Foot Right" %command%
+
 Next steps:
   1. vrswitch wivrn
-  2. Launch VRChat with these launch options:
-     PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_SERIALS="Hips;Chest;Elbow Left;Elbow Right;Knee Left;Knee Right;Foot Left;Foot Right" %command%
+  2. Reconnect the headset, launch VRChat with the options above.
 
 Logs: journalctl --user -u wivrn | grep "steamvr_lh driver"
+Check install: ./tools/doctor.sh (when present) or vrswitch status
 EOF
+}
+
+install_user_env() {
+    # Manager-level env for apps the server spawns as transient units
+    # (WayVR dashboard): the IPC tag bypass must be in the user manager env,
+    # service drop-ins do not propagate to spawned units.
+    local d="$XDG_CONFIG_HOME/environment.d" f="$d/wivrn-ipc.conf"
+    mkdir -p "$d"
+    cat >"$f" <<'EOF'
+# Bypass Monado IPC git-tag check (server/libs may come from different
+# checkouts after partial rebuilds). Remove after a full same-tree rebuild.
+IPC_IGNORE_VERSION=1
+EOF
+    say "user env: $f"
+    if command -v systemctl >/dev/null 2>&1; then
+        user_systemctl set-environment IPC_IGNORE_VERSION=1 || true
+    fi
+}
+
+install_vrswitch() {
+    # Always sync: a stale ~/.local/bin copy silently drops fixes.
+    local dst="$INVOKING_HOME/.local/bin/vrswitch"
+    mkdir -p "$(dirname "$dst")"
+    cp -f "$REPO_DIR/tools/vrswitch" "$dst"
+    chmod +x "$dst"
+    say "vrswitch: $dst"
+    case ":$PATH:" in
+        *":$INVOKING_HOME/.local/bin:"*) ;;
+        *) warn "$INVOKING_HOME/.local/bin is not on PATH; add it or run $dst directly" ;;
+    esac
+}
+
+ensure_steam_appid() {
+    # The Standable driver's Steam ownership check fails (Auth: 17777,
+    # estimator never runs, IK frozen) without AppID context: no GUI running,
+    # no steam_appid.txt. Drop the file next to the server exe.
+    local exe
+    exe="$(find "$XDG_DATA_HOME/Steam/steamapps/common/Standable Full Body Estimation/bin/linux64" \
+        -maxdepth 1 -name ignition_server.exe 2>/dev/null | head -1)"
+    if [ -z "$exe" ]; then
+        warn "ignition_server.exe not found; skipping steam_appid.txt (port installer must run first)"
+        return 0
+    fi
+    printf '2370570' >"$(dirname "$exe")/steam_appid.txt"
+    say "steam_appid.txt: $(dirname "$exe")/steam_appid.txt"
+}
+
+check_vrchat_launch_options() {
+    # Steam owns localconfig.vdf and rewrites it; never edit while Steam runs.
+    # Verify and print the exact string instead.
+    local want='IPC_IGNORE_VERSION=1 PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_SERIALS="Hips;Chest;Elbow Left;Elbow Right;Knee Left;Knee Right;Foot Left;Foot Right" %command%'
+    local f
+    f="$(find "$XDG_DATA_HOME/Steam/userdata" -path "*/config/localconfig.vdf" 2>/dev/null | head -1)"
+    if [ -z "$f" ]; then
+        warn "localconfig.vdf not found; set VRChat launch options manually:"
+        say "  $want"
+        return 0
+    fi
+    if grep -qF "$want" "$f" 2>/dev/null; then
+        say "VRChat launch options: OK"
+    else
+        warn "VRChat launch options mismatch. Set in Steam -> VRChat Properties -> General:"
+        say "  $want"
+    fi
 }
 
 # --- main -------------------------------------------------------------------
@@ -336,4 +410,8 @@ fi
 
 install_reaper
 install_dropin
+install_user_env
+install_vrswitch
+ensure_steam_appid
+check_vrchat_launch_options
 print_next_steps
