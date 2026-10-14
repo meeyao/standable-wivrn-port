@@ -40,9 +40,29 @@ Each item is symptom -> cause -> fix.
 
 ## IK proportions wrong (elbows off, spine/hips inverted)
 
-- Cause: the driver is stuck at its default 105 cm height until a calibration
-  completes, and manual in-driver T-pose calibration does not fire under WiVRn.
-- Fix: use VRChat auto-calibration (OSC) mode. Known issue.
+- Cause: the driver is stuck at its default 105 cm height: either no
+  calibration has completed yet, or VRChat Avatar Measurement is Arm Span
+  instead of Height.
+- Fix: hold a true side-side T-pose until the driver clicks twice, then set
+  VRChat measurement to Height and recalibrate avatar + driver.
+
+## Trackers frozen in a slouched pose, estimator dead
+
+- Cause: the driver's Steam ownership check failed. The estimator never runs
+  (no `Auth: 1` in the log).
+- Fix: `journalctl --user -u wivrn | grep -i auth`. `Auth: 17777` means the
+  check has no AppID context: make sure
+  `.../Standable Full Body Estimation/bin/linux64/steam_appid.txt` contains
+  `2370570` (the installer writes it; updates wipe it), then
+  `systemctl --user restart wivrn.service`. Steam must be logged in.
+
+## No OpenXR app can start a session (WayVR/VRChat fail, version mismatch)
+
+- Cause: `wivrn-server` and the client `.so` libs came from different builds
+  (e.g. a distro package overwrote one side). The log shows
+  `ipc_client_check_git_tag ... does not match`.
+- Fix: reinstall (same-tree triple), or export `IPC_IGNORE_VERSION=1` for
+  the app. The installer sets it in all the places it controls.
 
 ## WiVRn service stuck "failed" after stop
 

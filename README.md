@@ -3,28 +3,27 @@
 Run the real Standable Full Body Estimation SteamVR driver under WiVRn on Linux.
 No SteamVR. 8 proxy trackers in VRChat.
 
-> # :warning: EXPERIMENTAL: BROKEN / INCOMPLETE STATE
+> # :warning: EXPERIMENTAL: UNDER ACTIVE DEVELOPMENT
 >
-> **THIS IS AN EXPERIMENTAL, PARTIALLY BROKEN PORT. IT IS NOT READY FOR
-> NORMAL USE.**
+> **THIS PORT WORKS BUT IS FRAGILE. Expect to re-run the installer or
+> `vrswitch` after any SteamVR, WiVRn, Proton, VRChat or Standable update.**
 >
-> **Known to be broken or missing right now:**
+> **Current status (Oct 2026):**
 >
-> - **Manual in-driver T-pose calibration does not fire.** The driver's own
->   calibration gesture never completes under WiVRn.
-> - **Body proportions/IK are wrong.** The driver runs at a default 105 cm
->   height until a calibration completes, so arms/legs/spine are scaled wrong
->   (elbows off, hips/spine inverted).
-> - **Only the VRChat auto-calibration (OSC) path works**, and only roughly
->   (~70% accuracy observed).
-> - **The in-driver Standable GUI reports "SteamVR missing"**: expected; ignore
->   it. The GUI is not required.
-> - Expect breakage on any SteamVR, WiVRn, Proton, VRChat or Standable update.
->   Nothing here is stable.
+> - **Driver + estimation works.** The real Standable driver runs hosted,
+>   manual in-driver T-pose calibration fires, 8 proxy trackers reach VRChat.
+> - **Standable GUI launches** (Phase 2, in progress): window runs, VR backend
+>   initializes. SteamVR-dashboard features have no equivalent under WiVRn.
+> - **Known fragile:** the driver's Steam auth needs `steam_appid.txt`
+>   (installer writes it; updates may wipe it — symptom: frozen slouched IK,
+>   `Auth: 17777` in the wivrn log). Partial WiVRn upgrades break all VR
+>   sessions (symptom: `ipc_client_check_git_tag` mismatch — reinstall).
+> - The in-driver Standable GUI reports "SteamVR missing" if its VR backend
+>   fails to init: check `game.log`, not the dialog.
 >
 > **USE AT YOUR OWN RISK. No support, no guarantees, may break your setup.**
 >
-> If you want a working Standable setup today, use
+> If you want a zero-fuss Standable setup today, use
 > **[SteamVR Port](https://github.com/meeyao/standable-linux-port)** (SteamVR on
 > Linux) or **SteamVR on Windows**. XD :stuck_out_tongue:
 
@@ -65,11 +64,11 @@ Env: `PORT_INSTALLER_REPO`, `PORT_INSTALLER_REF`, `WIVRN_REPO`, `WIVRN_REF`,
 ```sh
 vrswitch wivrn
 ```
-
-Launch VRChat with these launch options:
+Reconnect the headset, then launch VRChat with these launch options
+(Steam -> VRChat Properties -> General):
 
 ```
-PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_SERIALS="Hips;Chest;Elbow Left;Elbow Right;Knee Left;Knee Right;Foot Left;Foot Right" %command%
+IPC_IGNORE_VERSION=1 PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_SERIALS="Hips;Chest;Elbow Left;Elbow Right;Knee Left;Knee Right;Foot Left;Foot Right" %command%
 ```
 
 ## Uninstall
@@ -80,8 +79,10 @@ PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_SERIALS="Hips;Chest;El
 
 ## Notes / Known issues
 
-- Manual in-driver T-pose calibration does not fire under WiVRn yet; use VRChat
-  auto-calibration (OSC) mode. Trackers reach VRChat and estimation works.
+- Calibrate in this order: in-driver T-pose first (sets height/floor), then
+  VRChat avatar calibration. If proportions look wrong (straight legs when
+  crouching), VRChat Avatar Measurement must be **Height**, not Arm Span,
+  then recalibrate both.
 - SteamVR owns the headset; WiVRn and SteamVR are mutually exclusive. `vrswitch`
   handles the handoff.
 
