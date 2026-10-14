@@ -241,6 +241,10 @@ Environment=WIVRN_USE_STEAMVR_LH=1
 Environment=LH_LOAD_STANDABLE=1
 Environment=LH_LOAD_LIGHTHOUSE=0
 Environment=LH_DISCOVER_WAIT_MS=30000
+# Bypass Monado IPC git-tag check: server and client libs can come from
+# different monado checkouts (partial rebuilds/redeploys). Remove after a full
+# same-tree rebuild + redeploy of wivrn-server and both .so libs.
+Environment=IPC_IGNORE_VERSION=1
 # Best-effort shim cleanup on start; the timer handles mid-session orphans.
 ExecStartPre=-/usr/local/bin/reap-ignition --quiet --kill
 ExecStopPost=-/usr/local/bin/reap-ignition --quiet --kill
