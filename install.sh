@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Standable WiVRn Linux Port installer.
 #
-# Runs the external port installer (Standable + Proton prefix side), then builds
+# Runs the vendored port installer (Standable + Proton prefix side), then builds
 # upstream WiVRn + the Standable patch series and installs the systemd user
 # drop-in that enables steamvr_lh driver hosting. Idempotent.
 set -euo pipefail
@@ -11,8 +11,7 @@ REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 . "$REPO_DIR/tools/lib.sh"
 
 # --- overridable configuration ---------------------------------------------
-PORT_INSTALLER_REPO="${PORT_INSTALLER_REPO:-https://github.com/meeyao/standable-linux-port}"
-PORT_INSTALLER_REF="${PORT_INSTALLER_REF:-}"   # empty = repo default branch
+PORT_INSTALLER_DIR="$REPO_DIR/port"   # vendored Standable/Proton installer
 # Upstream WiVRn + our patch series (patches/wivrn, patches/monado). The pinned
 # ref lives in wivrn-rev; overriding WIVRN_REF is for testing new upstream tags.
 WIVRN_REPO="${WIVRN_REPO:-https://github.com/WiVRn/WiVRn}"
@@ -40,8 +39,6 @@ Usage: install.sh [options]
   -h, --help              show this help
 
 Environment:
-  PORT_INSTALLER_REPO     default https://github.com/meeyao/standable-linux-port
-  PORT_INSTALLER_REF      git ref, default: repo default branch
   WIVRN_REPO              default https://github.com/WiVRn/WiVRn (upstream)
   WIVRN_REF               default: the pinned tag in ./wivrn-rev
 EOF
@@ -99,8 +96,8 @@ EOF
 }
 
 # --- vendored Ignition bytes ------------------------------------------------
-# Kept for verification and offline reference. The port installer ships its own
-# copy of the same pinned bytes, so we check ours match the expected hashes.
+# Kept for verification and offline reference. port/vendor ships its own copy
+# of the same pinned bytes, so we check ours match the expected hashes.
 verify_vendor() {
     local sums="$REPO_DIR/vendor/SHA256SUMS"
     [ -f "$sums" ] || die "missing vendor/SHA256SUMS"
@@ -109,31 +106,22 @@ verify_vendor() {
     ( cd "$REPO_DIR/vendor" && sha256sum -c SHA256SUMS ) || die "vendor checksum verification failed"
 }
 
-# --- Standable / Proton side (external installer) ---------------------------
-# The port installer owns the Standable/Proton side and ships its own pinned
-# Ignition bytes. We keep a copy in vendor/ for verification and offline
-# reference, and verify it before trusting the port installer's output.
+# --- Standable / Proton side (vendored installer) ---------------------------
+# port/ is a self-contained copy of the Standable/Proton installer, so this repo
+# does not depend on another repo at install time. See port/UPSTREAM for the
+# commit it was taken from.
 run_port_installer() {
     say "port installer: Standable + Proton prefix side"
-    require git
-    mkdir -p "$CACHE_DIR"
-    local dst="$CACHE_DIR/port-installer"
-    if [ -d "$dst/.git" ]; then
-        git -C "$dst" fetch --depth 1 origin ${PORT_INSTALLER_REF:+"$PORT_INSTALLER_REF"} || true
-        git -C "$dst" checkout --detach "${PORT_INSTALLER_REF:-FETCH_HEAD}"
-    else
-        git clone --depth 1 ${PORT_INSTALLER_REF:+--branch "$PORT_INSTALLER_REF"} \
-            "$PORT_INSTALLER_REPO" "$dst"
-    fi
-    local script="" s
+    local script=""
+    local s
     for s in install.sh setup.sh install; do
-        if [ -f "$dst/$s" ]; then script="$dst/$s"; break; fi
+        if [ -f "$PORT_INSTALLER_DIR/$s" ]; then script="$PORT_INSTALLER_DIR/$s"; break; fi
     done
-    [ -n "$script" ] || die "no installer script found in $dst"
+    [ -n "$script" ] || die "no installer script found in $PORT_INSTALLER_DIR"
     chmod +x "$script"
     # -y assumes yes to package-install prompts; use --help on the port
     # installer directly if you need finer control.
-    ( cd "$dst" && "./$(basename "$script")" -y )
+    ( cd "$PORT_INSTALLER_DIR" && "./$(basename "$script")" -y )
 }
 
 # --- WiVRn installation -----------------------------------------------------

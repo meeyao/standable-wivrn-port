@@ -43,7 +43,11 @@ Options:
 - `--skip-port-installer`: skip the Standable and Proton setup (already configured)
 - `--help`: show installer options
 
-Environment: `PORT_INSTALLER_REPO`, `PORT_INSTALLER_REF`, `WIVRN_REPO`, `WIVRN_REF`.
+Environment: `WIVRN_REPO`, `WIVRN_REF`.
+
+The Standable/Proton installer is vendored in `port/`, so this repo installs
+without cloning the SteamVR port. `port/UPSTREAM` records what it came from and
+the local WiVRn changes.
 
 ## Run
 

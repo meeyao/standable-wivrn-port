@@ -1,0 +1,15 @@
+Vendored from https://github.com/meeyao/standable-linux-port
+Branch: testing/rc
+Commit: 90b0844 (plus the WiVRn GUI changes now carried locally)
+
+This directory is a self-contained copy so the WiVRn port does not clone or
+depend on the SteamVR port at install time. WiVRn-specific edits live here:
+
+  templates/launch_serverhelper.sh.in
+    - warm_wineserver() (persistent prefix server, serialised socket)
+    - PSVR2 reg import via $PROTON_WINE (not `proton run`)
+    - STANDABLE_GUI=1: spawn Standable.exe into the driver wineserver,
+      cwd at the game root, Steam identity env
+
+When pulling fixes from the SteamVR port, diff against that repo and keep
+these three changes.

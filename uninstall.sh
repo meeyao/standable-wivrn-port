@@ -9,8 +9,7 @@ REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 . "$REPO_DIR/tools/lib.sh"
 
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$INVOKING_HOME/.config}"
-XDG_CACHE_HOME="${XDG_CACHE_HOME:-$INVOKING_HOME/.cache}"
-CACHE_DIR="$XDG_CACHE_HOME/standable-wivrn-port"
+PORT_INSTALLER_DIR="$REPO_DIR/port"
 
 WIVRN_LIBDIR="/usr/lib/wivrn"
 WIVRN_BINDIR="/usr/bin"
@@ -28,7 +27,7 @@ usage() {
     cat <<'EOF'
 Usage: uninstall.sh [--with-port-installer]
 
-  --with-port-installer   also run the external port installer's uninstaller
+  --with-port-installer   also run the vendored port installer's uninstaller
   -h, --help              show this help
 EOF
 }
@@ -89,7 +88,7 @@ if [ -L "$RUNTIME_LINK" ] && [ "$(readlink "$RUNTIME_LINK" 2>/dev/null || true)"
 fi
 
 if [ "$RUN_PORT_UNINSTALL" -eq 1 ]; then
-    dst="$CACHE_DIR/port-installer"
+    dst="$PORT_INSTALLER_DIR"
     script=""
     for s in uninstall.sh uninstall; do
         if [ -f "$dst/$s" ]; then script="$dst/$s"; break; fi
