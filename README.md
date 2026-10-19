@@ -67,6 +67,20 @@ Calibrate in this order:
 
 SteamVR and WiVRn cannot own the headset at the same time. Use `vrswitch` to switch between them.
 
+## Standable GUI
+
+Body estimation and T-pose calibration work without opening the GUI. To get the Standable settings window on your desktop:
+
+1. In Steam, right-click **Standable Full Body Estimation** → **Properties** → **General** → **Launch Options**, and set:
+
+   ```sh
+   bash $HOME/.local/bin/standable_launch_hook.sh %command%
+   ```
+
+2. Start Standable from Steam.
+
+The launch hook (installed by the port installer) runs Standable in host context so its window renders and it shares one Proton prefix and wineserver with the driver. Under WiVRn the GUI is experimental, and some SteamVR-specific pages have no equivalent.
+
 ## Troubleshooting
 
 Each item is symptom, cause, and fix.
