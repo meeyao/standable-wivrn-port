@@ -246,6 +246,10 @@ Environment=WIVRN_USE_STEAMVR_LH=1
 Environment=LH_LOAD_STANDABLE=1
 Environment=LH_LOAD_LIGHTHOUSE=0
 Environment=LH_DISCOVER_WAIT_MS=30000
+# Launch the Standable GUI from the driver helper so it joins the driver's
+# wineserver (sockets/discovery are unreliable under Proton). The SteamVR port
+# leaves this unset.
+Environment=STANDABLE_GUI=1
 # Bypass Monado IPC git-tag check: server and client libs can come from
 # different monado checkouts (partial rebuilds/redeploys). Remove after a full
 # same-tree rebuild + redeploy of wivrn-server and both .so libs.
