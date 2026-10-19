@@ -20,8 +20,7 @@ Run the real Standable Full Body Estimation SteamVR driver on Linux with WiVRn, 
 - VRChat on Steam
 - Around 8 GB of free disk space
 - Arch/CachyOS or Debian/Ubuntu. On other distros, provide the WiVRn build dependencies (the installer prints them if a required tool is missing)
-
-The runtime also needs `libopenvr_api.so` (the `openvr` package on Arch). The installer warns if it is missing.
+- `libopenvr_api.so` (the `openvr` package on Arch; `libopenvr-api1` or `libopenvr-api2` on Debian/Ubuntu, in `contrib` or `universe`). WiVRn links it, so the build and the runtime both need it. The installer checks for it.
 
 ## Install
 
@@ -94,7 +93,35 @@ The `PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1` launch option is missing. Add t
 
 **Trackers do not appear in VRChat**
 
-`XRIZER_TRACKER_SERIALS` is unset or does not match the 8 proxies. Set it exactly as shown, semicolon-separated, with no extra spaces.
+The 8 proxies reach VRChat through xrizer, which maps OpenVR tracker roles to OpenXR. VRChat only sees them when the launch options reach it and the serial list matches the devices the driver reports.
+
+1. Confirm the proxies exist. With WiVRn running and the headset connected:
+
+   ```sh
+   journalctl --user -u wivrn | grep "lighthouse tracker"
+   ```
+
+   You should see 8 lines: `Hips`, `Chest`, `Elbow Left`, `Elbow Right`, `Knee Left`, `Knee Right`, `Foot Left`, `Foot Right`. Use these exact names in the next step; if your build reports different names, use those instead.
+
+2. Confirm the launch options are on VRChat. **Steam → VRChat → Properties → General → Launch Options** must contain, exactly:
+
+   ```sh
+   IPC_IGNORE_VERSION=1 PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_SERIALS="Hips;Chest;Elbow Left;Elbow Right;Knee Left;Knee Right;Foot Left;Foot Right" %command%
+   ```
+
+   The list must have one entry per proxy, matching spelling and case, with no extra spaces and no trailing separator. Launch options only apply when VRChat is started from Steam; a desktop shortcut or an already-running instance will not pick them up.
+
+3. Confirm xrizer is the OpenVR runtime:
+
+   ```sh
+   vrswitch status
+   ```
+
+   `OpenVR runtime:` should be `/opt/xrizer`. If it points at SteamVR instead, run `vrswitch wivrn` again.
+
+4. Restart cleanly. Set the options, fully quit VRChat, then launch it from Steam.
+
+5. If they still do not appear, check VRChat's `output_log.txt` (in the game's `_data` directory) for tracker or xrizer lines. If the proxies exist in the WiVRn log but never move, the estimator is not running; see the frozen IK entry above.
 
 **Elbows are off, or the legs and spine look inverted**
 

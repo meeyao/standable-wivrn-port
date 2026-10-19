@@ -69,24 +69,30 @@ print_build_deps() {
             cat <<'EOF'
 WiVRn build deps (Arch/CachyOS):
   sudo pacman -S --needed base-devel cmake ninja git \
-    vulkan-headers vulkan-icd-loader libgl ffmpeg libx264 pipewire eigen glib2 \
-    libbsd libdrm libxrandr libxcb libx11
+    vulkan-headers vulkan-icd-loader glslang spirv-tools libglvnd \
+    ffmpeg libx264 pipewire eigen glib2 glib2-devel \
+    nlohmann-json cli11 boost avahi \
+    libbsd libdrm libxrandr libxcb libx11 wayland wayland-protocols openvr
 EOF
             ;;
         debian)
             cat <<'EOF'
 WiVRn build deps (Debian/Ubuntu):
   sudo apt install build-essential cmake ninja-build git \
-    libvulkan-dev libgl-dev \
+    libvulkan-dev glslang-tools spirv-tools libgl-dev \
     libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libx264-dev \
-    libpipewire-0.3-dev libeigen3-dev libglib2.0-dev \
-    libbsd-dev libdrm-dev libxrandr-dev libxcb1-dev libx11-dev
+    libpipewire-0.3-dev libeigen3-dev libglib2.0-dev libglib2.0-dev-bin \
+    nlohmann-json3-dev libcli11-dev libboost-all-dev \
+    libavahi-client-dev libavahi-glib-dev libwayland-dev \
+    libbsd-dev libdrm-dev libxrandr-dev libxcb1-dev libx11-dev libopenvr-api1
 EOF
             ;;
         *)
             cat <<'EOF'
-Install build deps for WiVRn: cmake, ninja, C/C++ toolchain, Vulkan headers,
-FFmpeg/libx264, PipeWire, Eigen, GLib, libbsd, libdrm, X11/XCB/Xrandr dev.
+Install build deps for WiVRn: cmake, ninja, a C/C++ toolchain, Vulkan headers,
+glslang/spirv-tools, FFmpeg/libx264, PipeWire, Eigen, GLib (including
+gdbus-codegen), nlohmann-json, CLI11, Boost, Avahi, libbsd, libdrm,
+X11/XCB/Xrandr, Wayland, and the OpenVR API library (libopenvr_api.so).
 EOF
             ;;
     esac
