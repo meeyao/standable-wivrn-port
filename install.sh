@@ -35,7 +35,7 @@ usage() {
     cat <<'EOF'
 Usage: install.sh [options]
 
-  --skip-port-installer   do not run the external Standable/Proton installer
+  --skip-port-installer   do not run the vendored Standable/Proton installer
   -h, --help              show this help
 
 Environment:
