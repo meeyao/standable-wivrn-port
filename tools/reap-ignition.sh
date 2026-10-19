@@ -124,6 +124,18 @@ for pid in "${!CMD_OF[@]}"; do
   esac
 done
 
+# Also protect the live SteamVR host tree (vrserver/vrmonitor): under SteamVR
+# the Standable shim is a descendant of vrserver, not of wivrn-server. Without
+# this the reaper deleted the live SteamVR-era server (the reason the drop-in
+# timer was paused). Token/session scoping in launch_serverhelper.sh handles
+# spawn dedup; here we just never touch a server a live host is running.
+for pid in "${!PPID_OF[@]}"; do
+  comm="$(cat "/proc/$pid/comm" 2>/dev/null || true)"
+  case "$comm" in
+    vrserver|vrmonitor) mark_descendants "$pid" ;;
+  esac
+done
+
 log "reap-ignition: ${wivrn_count} live wivrn-server, ${#LIVE[@]} protected pids"
 
 # --- is a pid still attached to a live Steam launch? ------------------------

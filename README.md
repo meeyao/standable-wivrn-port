@@ -90,6 +90,16 @@ Each item is symptom, cause, and fix.
 
 Standable's Steam authentication has no AppID context. The installer writes `steam_appid.txt` (`2370570`) next to `ignition_server.exe`. Updates can remove it. Recreate it, then restart WiVRn. Steam must be logged in.
 
+**IK is frozen but the log shows `Auth: 1`**
+
+The driver only saw the headset and one controller. In the log, `[DeviceManager] Total:` should be 3 (headset plus both controllers); `Total: 2` means a controller never reached the driver, and Standable cannot estimate without both hands.
+
+```sh
+journalctl --user -u wivrn | grep -E "wivrn-(hmd|left|right)|Total:"
+```
+
+If `wivrn-right` or `wivrn-left` is missing, get both controllers awake and tracked in the headset, then restart WiVRn (`vrswitch wivrn`). Frequent `XRT_DEVICE_INVALID` toggling alongside means the controllers are losing tracking.
+
 **No OpenXR app can start a session (`ipc_client_check_git_tag` mismatch)**
 
 The server and the runtime libraries came from different builds. Re-run `./install.sh`, or set `IPC_IGNORE_VERSION=1` for the app.

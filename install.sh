@@ -251,12 +251,10 @@ Environment=LH_DISCOVER_WAIT_MS=30000
 # same-tree rebuild + redeploy of wivrn-server and both .so libs.
 Environment=IPC_IGNORE_VERSION=1
 # Best-effort shim cleanup on start; the timer handles mid-session orphans.
-# PAUSED: reap-ignition treats any non-wivrn-server ignition/wineserver as an
-# orphan, so it kill -9s the live Standable server under SteamVR
-# (no wivrn-server to protect the tree) -> shm teardown / error 105.
-# Re-enable once the reaper protects a live vrserver/vrmonitor tree.
-#ExecStartPre=-/usr/local/bin/reap-ignition --quiet --kill
-#ExecStopPost=-/usr/local/bin/reap-ignition --quiet --kill
+# reap-ignition now protects the live host tree in BOTH modes (a running
+# wivrn-server, or vrserver/vrmonitor under SteamVR), so it is safe to run.
+ExecStartPre=-/usr/local/bin/reap-ignition --quiet --kill
+ExecStopPost=-/usr/local/bin/reap-ignition --quiet --kill
 EOF
     if [ "$(id -u)" -eq 0 ] && [ "$INVOKING_USER" != "root" ]; then
         runuser -u "$INVOKING_USER" -- cp "$tmp" "$f"
@@ -293,10 +291,10 @@ EOF
 
     if command -v systemctl >/dev/null 2>&1; then
         user_systemctl daemon-reload || true
-        # Timer left disabled on purpose (same reason as above): it would reap
-        # the live Standable server under SteamVR. Enable manually once the
-        # reaper is SteamVR-aware.
-        say "wivrn-reap.timer installed but NOT enabled (see above)"
+        # reap-ignition protects the live host tree in both modes now, so the
+        # periodic sweeper is safe to enable.
+        user_systemctl enable --now wivrn-reap.timer >/dev/null 2>&1 || true
+        say "wivrn-reap.timer installed and enabled"
     fi
 }
 
