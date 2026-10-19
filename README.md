@@ -69,17 +69,18 @@ SteamVR and WiVRn cannot own the headset at the same time. Use `vrswitch` to swi
 
 ## Standable GUI
 
-Body estimation and T-pose calibration work without opening the GUI. To get the Standable settings window on your desktop:
+Body estimation and T-pose calibration work without opening the GUI. To open the Standable settings window while WiVRn hosts the driver:
 
-1. In Steam, right-click **Standable Full Body Estimation** → **Properties** → **General** → **Launch Options**, and set:
+1. Make sure WiVRn is the current runtime (`vrswitch wivrn`).
+2. Start it from your desktop application menu (**Standable GUI (WiVRn)**), or run:
 
    ```sh
-   bash $HOME/.local/bin/standable_launch_hook.sh %command%
+   ~/.local/bin/standable-gui-wivrn
    ```
 
-2. Start Standable from Steam.
+Launch it from a desktop session, not through Steam: Steam's sandbox forks a second wineserver, and the GUI would then be unable to talk to the driver.
 
-The launch hook (installed by the port installer) runs Standable in host context so its window renders and it shares one Proton prefix and wineserver with the driver. Under WiVRn the GUI is experimental, and some SteamVR-specific pages have no equivalent.
+The launcher runs Standable in host context so it shares one Proton prefix and wineserver with the driver. The desktop settings window works; the in-VR dashboard is experimental and needs an OpenComposite/xrizer bridge DLL (point `BRIDGE_DIR` at it in `~/.config/standable-wivrn/paths.conf`).
 
 ## Troubleshooting
 
@@ -200,5 +201,6 @@ The Standable driver itself is proprietary and is not included here. The port in
 | `wivrn-rev` | pinned upstream WiVRn tag |
 | `vendor/` | Ignition shim binaries loaded by `steamvr_lh` |
 | `src/steamvr_lh/` | reference copy of the pose-feed host code |
+| `tools/standable-gui-wivrn.sh` | desktop launcher for the Standable settings window |
 | `tools/vrswitch` | switch the OpenXR and OpenVR runtime between WiVRn and SteamVR |
 | `tools/reap-ignition.sh` | remove orphaned Ignition shim processes |

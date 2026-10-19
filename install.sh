@@ -198,10 +198,22 @@ install_source() {
 # dependency of WiVRn. Without it, Monado's find_library() disables OpenVR
 # support, which removes the steamvr_lh host this port relies on.
 check_wivrn_runtime_deps() {
-    if command -v ldconfig >/dev/null 2>&1 && ! ldconfig -p 2>/dev/null | grep -q 'libopenvr_api\.so'; then
-        print_build_deps
-        die "libopenvr_api.so not found; install the OpenVR API library and re-run"
+    # NB: do not pipe ldconfig into `grep -q`: under `set -o pipefail` grep exits
+    # on the first match and ldconfig dies of SIGPIPE, so the pipeline reports
+    # failure even when the library is present.
+    local libs=""
+    if command -v ldconfig >/dev/null 2>&1; then
+        libs="$(ldconfig -p 2>/dev/null || true)"
     fi
+    case "$libs" in
+        *libopenvr_api.so*) return 0 ;;
+    esac
+    local d
+    for d in /usr/lib /usr/lib64 /usr/local/lib /usr/local/lib64; do
+        [ -e "$d/libopenvr_api.so" ] && return 0
+    done
+    print_build_deps
+    die "libopenvr_api.so not found; install the OpenVR API library and re-run"
 }
 
 # --- systemd drop-in --------------------------------------------------------
@@ -342,7 +354,7 @@ ensure_steam_appid() {
     # no steam_appid.txt. Drop the file next to the server exe.
     local exe
     exe="$(find "$XDG_DATA_HOME/Steam/steamapps/common/Standable Full Body Estimation/bin/linux64" \
-        -maxdepth 1 -name ignition_server.exe 2>/dev/null | head -1)"
+        -maxdepth 1 -name ignition_server.exe -print -quit 2>/dev/null)"
     if [ -z "$exe" ]; then
         warn "ignition_server.exe not found; skipping steam_appid.txt (port installer must run first)"
         return 0
@@ -356,7 +368,7 @@ check_vrchat_launch_options() {
     # Verify and print the exact string instead.
     local want='IPC_IGNORE_VERSION=1 PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_SERIALS="Hips;Chest;Elbow Left;Elbow Right;Knee Left;Knee Right;Foot Left;Foot Right" %command%'
     local f
-    f="$(find "$XDG_DATA_HOME/Steam/userdata" -path "*/config/localconfig.vdf" 2>/dev/null | head -1)"
+    f="$(find "$XDG_DATA_HOME/Steam/userdata" -path "*/config/localconfig.vdf" -print -quit 2>/dev/null)"
     if [ -z "$f" ]; then
         warn "localconfig.vdf not found; set VRChat launch options manually:"
         say "  $want"
@@ -368,6 +380,67 @@ check_vrchat_launch_options() {
         warn "VRChat launch options mismatch. Set in Steam -> VRChat Properties -> General:"
         say "  $want"
     fi
+}
+
+# Read KEY="value" or export KEY="value" from a file, first match. Avoids
+# `sed | head`, which trips `set -o pipefail` on SIGPIPE.
+hookval() {
+    local key="$1" file="$2" line
+    while IFS= read -r line; do
+        case "$line" in
+            "$key"=*|export\ "$key"=*)
+                line="${line#*=}"
+                line="${line#\"}"
+                line="${line%\"}"
+                printf '%s' "$line"
+                return 0
+                ;;
+        esac
+    done <"$file"
+}
+
+install_gui_launcher() {
+    # Desktop launcher for the Standable settings window under WiVRn. It reuses
+    # the paths the port installer baked into the launch hook (same prefix,
+    # Proton and game dir) so the two cannot drift.
+    local hook="$INVOKING_HOME/.local/bin/standable_launch_hook.sh"
+    if [ ! -f "$hook" ]; then
+        warn "launch hook not found; skipping the Standable GUI launcher"
+        return 0
+    fi
+    local gd compat client proton appid
+    gd="$(hookval GAME_DIR "$hook")"
+    compat="$(hookval STEAM_COMPAT_DATA_PATH "$hook")"
+    client="$(hookval STEAM_COMPAT_CLIENT_INSTALL_PATH "$hook")"
+    proton="$(hookval PROTON "$hook")"
+    appid="$(hookval SteamAppId "$hook")"
+    if [ -z "$gd" ] || [ -z "$compat" ] || [ -z "$proton" ] || [ -z "$appid" ]; then
+        warn "could not read paths from $hook; skipping the Standable GUI launcher"
+        return 0
+    fi
+    local confdir="$XDG_CONFIG_HOME/standable-wivrn"
+    mkdir -p "$confdir" "$INVOKING_HOME/.local/bin" "$INVOKING_HOME/.local/share/applications"
+    cat >"$confdir/paths.conf" <<EOF
+GAME_DIR='$gd'
+STEAM_COMPAT_DATA_PATH='$compat'
+STEAM_COMPAT_CLIENT_INSTALL_PATH='$client'
+PROTON='$proton'
+APP_ID='$appid'
+# Optional: a directory holding an OpenComposite/xrizer vrclient_x64.dll for the
+# in-VR dashboard. Empty means desktop window only.
+BRIDGE_DIR=''
+EOF
+    install -m 0755 "$REPO_DIR/tools/standable-gui-wivrn.sh" "$INVOKING_HOME/.local/bin/standable-gui-wivrn"
+    cat >"$INVOKING_HOME/.local/share/applications/standable-gui-wivrn.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Name=Standable GUI (WiVRn)
+Comment=Open the Standable settings window while WiVRn hosts the driver
+Exec=$INVOKING_HOME/.local/bin/standable-gui-wivrn
+Terminal=false
+Categories=Utility;
+EOF
+    say "GUI launcher: $INVOKING_HOME/.local/bin/standable-gui-wivrn"
 }
 
 # --- main -------------------------------------------------------------------
@@ -397,6 +470,7 @@ install_reaper
 install_dropin
 install_user_env
 install_vrswitch
+install_gui_launcher
 ensure_steam_appid
 check_vrchat_launch_options
 print_next_steps

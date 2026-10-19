@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Undo what install.sh added: WiVRn binaries, the OpenXR manifest and the
-# systemd drop-in. Does not touch Steam, Standable or the Proton prefix.
+# Undo what install.sh added: WiVRn binaries and unit, the OpenXR manifest, the
+# systemd drop-in and helper files. Does not touch Steam, Standable or the
+# Proton prefix.
 set -euo pipefail
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -14,7 +15,12 @@ CACHE_DIR="$XDG_CACHE_HOME/standable-wivrn-port"
 WIVRN_LIBDIR="/usr/lib/wivrn"
 WIVRN_BINDIR="/usr/bin"
 OPENXR_DIR="/usr/share/openxr/1"
-DROPIN="$XDG_CONFIG_HOME/systemd/user/wivrn.service.d/standable.conf"
+UNIT="/usr/lib/systemd/user/wivrn.service"
+REAPER_BIN="/usr/local/bin/reap-ignition"
+SYSTEMD_USER="$XDG_CONFIG_HOME/systemd/user"
+DROPIN="$SYSTEMD_USER/wivrn.service.d/standable.conf"
+RUNTIME_LINK="$XDG_CONFIG_HOME/openxr/1/active_runtime.json"
+GUI_CONF_DIR="$XDG_CONFIG_HOME/standable-wivrn"
 
 RUN_PORT_UNINSTALL=0
 
@@ -41,20 +47,22 @@ if command -v systemctl >/dev/null 2>&1; then
     user_systemctl stop wivrn.service >/dev/null 2>&1 || true
     user_systemctl reset-failed wivrn.service >/dev/null 2>&1 || true
 fi
-pkill -f wivrn-server >/dev/null 2>&1 || true
-pkill -f ignition_server >/dev/null 2>&1 || true
+# Reap by PID (pkill can hang on the agent/session shell).
+for pat in wivrn-server ignition_server; do
+    for p in /proc/[0-9]*; do
+        cmd="$(tr '\0' ' ' <"${p}/cmdline" 2>/dev/null || true)"
+        case "$cmd" in
+            *"$pat"*) kill -9 "${p#/proc/}" 2>/dev/null || true ;;
+        esac
+    done
+done
 
+say "removing systemd drop-in and helper units"
 if [ -f "$DROPIN" ]; then
-    say "removing $DROPIN"
-    if [ "$(id -u)" -eq 0 ] && [ "$INVOKING_USER" != "root" ] && command -v runuser >/dev/null 2>&1; then
-        runuser -u "$INVOKING_USER" -- rm -f "$DROPIN"
-        runuser -u "$INVOKING_USER" -- rmdir "$(dirname "$DROPIN")" 2>/dev/null || true
-    else
-        rm -f "$DROPIN"
-        rmdir "$(dirname "$DROPIN")" 2>/dev/null || true
-    fi
+    rm -f "$DROPIN"
+    rmdir "$(dirname "$DROPIN")" 2>/dev/null || true
 fi
-
+rm -f "$SYSTEMD_USER/wivrn-reap.service" "$SYSTEMD_USER/wivrn-reap.timer"
 if command -v systemctl >/dev/null 2>&1; then
     user_systemctl daemon-reload || true
 fi
@@ -63,6 +71,22 @@ say "removing WiVRn files"
 run_root rm -f "$WIVRN_BINDIR/wivrn-server"
 run_root rm -rf "$WIVRN_LIBDIR"
 run_root rm -f "$OPENXR_DIR/openxr_wivrn.json"
+run_root rm -f "$UNIT"
+run_root rm -f "$REAPER_BIN"
+
+say "removing user helper files"
+rm -f "$XDG_CONFIG_HOME/environment.d/wivrn-ipc.conf"
+rm -f "$INVOKING_HOME/.local/bin/vrswitch"
+rm -f "$INVOKING_HOME/.local/bin/standable-gui-wivrn"
+rm -f "$INVOKING_HOME/.local/share/applications/standable-gui-wivrn.desktop"
+rm -f "$GUI_CONF_DIR/paths.conf"
+rmdir "$GUI_CONF_DIR" 2>/dev/null || true
+
+# Drop the OpenXR active-runtime symlink only if it points at the manifest we
+# just removed, so we do not clobber a runtime the user set themselves.
+if [ -L "$RUNTIME_LINK" ] && [ "$(readlink "$RUNTIME_LINK" 2>/dev/null || true)" = "$OPENXR_DIR/openxr_wivrn.json" ]; then
+    rm -f "$RUNTIME_LINK"
+fi
 
 if [ "$RUN_PORT_UNINSTALL" -eq 1 ]; then
     dst="$CACHE_DIR/port-installer"
