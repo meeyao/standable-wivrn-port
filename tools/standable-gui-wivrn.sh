@@ -95,8 +95,20 @@ mkdir -p "$(dirname "$LOG")"
     echo "game:   $GAME_DIR/Standable.exe"
 } >> "$LOG"
 
+# Launch the GUI the SAME way launch_serverhelper.sh launches the driver: the
+# Proton wine binary directly with WINEPREFIX=$COMPAT/pfx. `proton run` sets a
+# different prefix context and started a SECOND wineserver, so the GUI's named
+# pipes (StandUI/StandAPI) never connected to the driver's. Sharing the wine
+# binary + WINEPREFIX makes Wine reuse the driver's wineserver.
+PROTON_DIR="$(dirname "$PROTON")"
+PROTON_WINE="$PROTON_DIR/files/bin/wine"
+export WINEPREFIX="$STEAM_COMPAT_DATA_PATH/pfx"
 cd "$GAME_DIR" || exit 1
-"$PROTON" run ./Standable.exe >> "$LOG" 2>&1
+if [ -x "$PROTON_WINE" ]; then
+    "$PROTON_WINE" ./Standable.exe >> "$LOG" 2>&1
+else
+    "$PROTON" runinprefix ./Standable.exe >> "$LOG" 2>&1
+fi
 _code=$?
 echo "exit:   $_code ($(date -Iseconds))" >> "$LOG"
 exit "$_code"

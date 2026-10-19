@@ -82,6 +82,8 @@ Launch it from a desktop session, not through Steam: Steam's sandbox forks a sec
 
 The launcher runs Standable in host context so it shares one Proton prefix and wineserver with the driver. The desktop settings window works; the in-VR dashboard is experimental and needs an OpenComposite/xrizer bridge DLL (point `BRIDGE_DIR` at it in `~/.config/standable-wivrn/paths.conf`).
 
+Live settings changes need the GUI and driver in the **same wineserver**. Wine still gives the GUI its own server in practice, so treat the GUI as settings-only: change what you need, close it, then restart the session for the settings to apply (the driver reads `settings.json` at launch).
+
 ## Troubleshooting
 
 Each item is symptom, cause, and fix.
