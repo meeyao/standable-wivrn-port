@@ -194,16 +194,13 @@ install_source() {
     write_openxr_json
 }
 
-# wivrn-server links libopenvr_api.so (Arch: openvr), a system dependency of
-# WiVRn, not something the installer ships.
+# wivrn-server links libopenvr_api.so (Arch: openvr), a build and runtime
+# dependency of WiVRn. Without it, Monado's find_library() disables OpenVR
+# support, which removes the steamvr_lh host this port relies on.
 check_wivrn_runtime_deps() {
     if command -v ldconfig >/dev/null 2>&1 && ! ldconfig -p 2>/dev/null | grep -q 'libopenvr_api\.so'; then
-        warn "libopenvr_api.so not found; wivrn-server will fail to load."
-        case "$(detect_distro)" in
-            arch)   say "  install: sudo pacman -S --needed openvr" ;;
-            debian) say "  install: sudo apt install libopenvr-api (or the WiVRn build deps)" ;;
-            *)      say "  install the OpenVR API library (libopenvr_api.so)." ;;
-        esac
+        print_build_deps
+        die "libopenvr_api.so not found; install the OpenVR API library and re-run"
     fi
 }
 
