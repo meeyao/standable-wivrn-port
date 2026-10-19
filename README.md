@@ -80,6 +80,15 @@ Body estimation and T-pose calibration work without opening the GUI. To open the
 
 Launch it from a desktop session, not through Steam: Steam's sandbox forks a second wineserver, and the GUI would then be unable to talk to the driver.
 
+**Start order** (the GUI joins the driver's wineserver, so the driver must be up first):
+
+1. WiVRn (connect the headset)
+2. WayVR
+3. VRChat — the Standable driver comes up with the session
+4. Standable GUI
+
+The driver's launcher starts a persistent wineserver (`wineserver -p`) so the later GUI joins that one instead of creating its own; named-pipe IPC does not cross wineservers.
+
 The launcher runs Standable in host context so it shares one Proton prefix and wineserver with the driver. The desktop settings window works; the in-VR dashboard is experimental and needs an OpenComposite/xrizer bridge DLL (point `BRIDGE_DIR` at it in `~/.config/standable-wivrn/paths.conf`).
 
 Live settings changes need the GUI and driver in the **same wineserver**. Wine still gives the GUI its own server in practice, so treat the GUI as settings-only: change what you need, close it, then restart the session for the settings to apply (the driver reads `settings.json` at launch).

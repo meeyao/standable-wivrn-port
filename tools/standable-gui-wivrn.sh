@@ -102,13 +102,35 @@ mkdir -p "$(dirname "$LOG")"
 # binary + WINEPREFIX makes Wine reuse the driver's wineserver.
 PROTON_DIR="$(dirname "$PROTON")"
 PROTON_WINE="$PROTON_DIR/files/bin/wine"
-export WINEPREFIX="$STEAM_COMPAT_DATA_PATH/pfx"
+PFX="$STEAM_COMPAT_DATA_PATH/pfx"
+export WINEPREFIX="$PFX"
 cd "$GAME_DIR" || exit 1
-if [ -x "$PROTON_WINE" ]; then
+
+# Wine's own server discovery is unreliable here (it has started a second
+# server and even replaced the driver's socket). Join the prefix's existing
+# wineserver explicitly: connect to its socket and hand the connected fd to
+# wine via WINESERVERSOCKET. Named pipes only cross within one wineserver, so
+# this is what makes the GUI's StandUI/StandAPI IPC reach the driver.
+WS_SOCK="/tmp/.wine-$(id -u)/server-$(printf %x "$(stat -c %d "$PFX" 2>/dev/null || echo 0)")-$(printf %x "$(stat -c %i "$PFX" 2>/dev/null || echo 0)")/socket"
+
+if [ -x "$PROTON_WINE" ] && [ -S "$WS_SOCK" ] && command -v python3 >/dev/null 2>&1; then
+    python3 - "$WS_SOCK" "$PROTON_WINE" "$GAME_DIR/Standable.exe" >> "$LOG" 2>&1 <<'PY'
+import os, socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect(sys.argv[1])
+os.set_inheritable(s.fileno(), True)
+env = dict(os.environ)
+env["WINESERVERSOCKET"] = str(s.fileno())
+os.chdir(os.path.dirname(sys.argv[3]))
+os.execve(sys.argv[2], [sys.argv[2], os.path.basename(sys.argv[3])], env)
+PY
+    _code=$?
+elif [ -x "$PROTON_WINE" ]; then
     "$PROTON_WINE" ./Standable.exe >> "$LOG" 2>&1
+    _code=$?
 else
     "$PROTON" runinprefix ./Standable.exe >> "$LOG" 2>&1
+    _code=$?
 fi
-_code=$?
 echo "exit:   $_code ($(date -Iseconds))" >> "$LOG"
 exit "$_code"
