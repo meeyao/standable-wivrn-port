@@ -1,39 +1,27 @@
 # Standable WiVRn Linux Port
 
-Run the real Standable Full Body Estimation SteamVR driver under WiVRn on Linux.
-No SteamVR. 8 proxy trackers in VRChat.
+Run the real Standable Full Body Estimation SteamVR driver on Linux with WiVRn, without running SteamVR. Adds 8 proxy trackers to VRChat.
 
-> # :warning: EXPERIMENTAL: UNDER ACTIVE DEVELOPMENT
+> **Experimental. Expect breakage.**
 >
-> **THIS PORT WORKS BUT IS FRAGILE. Expect to re-run the installer or
-> `vrswitch` after any SteamVR, WiVRn, Proton, VRChat or Standable update.**
+> The driver and body estimation work, including T-pose calibration and all 8 trackers in VRChat. The Standable GUI launches, but some SteamVR-specific features are unavailable.
 >
-> **Current status (Oct 2026):**
+> Updates to Steam, Proton, VRChat, Standable, or WiVRn can break the setup. You may need to rerun the installer or switch runtimes again.
 >
-> - **Driver + estimation works.** The real Standable driver runs hosted,
->   manual in-driver T-pose calibration fires, 8 proxy trackers reach VRChat.
-> - **Standable GUI launches** (Phase 2, in progress): window runs, VR backend
->   initializes. SteamVR-dashboard features have no equivalent under WiVRn.
-> - **Known fragile:** the driver's Steam auth needs `steam_appid.txt`
->   (installer writes it; updates may wipe it — symptom: frozen slouched IK,
->   `Auth: 17777` in the wivrn log). Partial WiVRn upgrades break all VR
->   sessions (symptom: `ipc_client_check_git_tag` mismatch — reinstall).
-> - The in-driver Standable GUI reports "SteamVR missing" if its VR backend
->   fails to init: check `game.log`, not the dialog.
+> This port was built with heavy use of AI assistance, followed by hardware testing. It has not been widely tested. It will likely break, and it will need troubleshooting. Treat it as a research project, not a supported product.
 >
-> **USE AT YOUR OWN RISK. No support, no guarantees, may break your setup.**
->
-> If you want a zero-fuss Standable setup today, use
-> **[SteamVR Port](https://github.com/meeyao/standable-linux-port)** (SteamVR on
-> Linux) or **SteamVR on Windows**. XD :stuck_out_tongue:
+> **Want a less experimental setup?** Try the [SteamVR Linux port](https://github.com/meeyao/standable-linux-port) or run SteamVR on Windows.
 
 ## Requirements
 
-- WiVRn installed, or built by this installer
-- Standable FBE owned on Steam
-- VRChat (Steam)
-- ~8 GB free disk (WiVRn build + Proton prefix)
-- Arch/CachyOS or Debian/Ubuntu; other distros must provide WiVRn build deps
+- Linux with the dependencies needed to build WiVRn (the installer builds it from source)
+- SteamVR installed in Steam. It is not run; the installer uses its paths to place compatibility shims.
+- Standable FBE on Steam
+- VRChat on Steam
+- Around 8 GB of free disk space
+- Arch/CachyOS or Debian/Ubuntu. On other distros, provide the WiVRn build dependencies (the installer prints them if a required tool is missing)
+
+The runtime also needs `libopenvr_api.so` (the `openvr` package on Arch). The installer warns if it is missing.
 
 ## Install
 
@@ -43,33 +31,118 @@ cd standable-wivrn-port
 ./install.sh
 ```
 
-`install.sh` does three things:
+The installer:
 
-1. Fetches the port installer (`meeyao/standable-linux-port`) into a cache dir and
-   runs it. That handles the Standable/Proton side: Steam root, game library,
-   Proton build, Standable install dir and its prefix, Windows-path emulation
-   fixes (fake SteamVR `bin/win64` with `vrpathreg`/`vrmonitor` shims, `vrclient`
-   DLLs, `SteamPath` registry, `S:` dosdevice, VRChat LocalLow symlink), and the
-   Ignition shim + Standable driver hook.
-2. Installs WiVRn (runtime + server) with the patches in this repo. Default is
-   prebuilt artifacts from the latest release; `--source` builds the fork.
-3. Writes the systemd user drop-in that enables `steamvr_lh` driver hosting.
+1. Sets up the Standable and Proton side (Steam root, Proton prefix, Windows-path shims, the Ignition shim, and the driver hook).
+2. Builds upstream WiVRn at the tag in `wivrn-rev`, applying the patch series in `patches/`, and installs it (server, runtime libraries, and systemd unit).
+3. Writes the systemd user drop-in that enables the `steamvr_lh` driver host.
 
-Flags: `--prebuilt` (default), `--source`, `--skip-port-installer`, `--help`.
-Env: `PORT_INSTALLER_REPO`, `PORT_INSTALLER_REF`, `WIVRN_REPO`, `WIVRN_REF`,
-`REPO_RELEASE_BASE`.
+The build takes a few minutes.
+
+Options:
+
+- `--skip-port-installer`: skip the Standable and Proton setup (already configured)
+- `--help`: show installer options
+
+Environment: `PORT_INSTALLER_REPO`, `PORT_INSTALLER_REF`, `WIVRN_REPO`, `WIVRN_REF`.
 
 ## Run
+
+Switch to WiVRn:
 
 ```sh
 vrswitch wivrn
 ```
-Reconnect the headset, then launch VRChat with these launch options
-(Steam -> VRChat Properties -> General):
 
-```
+Reconnect your headset, then add this to **Steam → VRChat → Properties → General → Launch Options**:
+
+```sh
 IPC_IGNORE_VERSION=1 PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_SERIALS="Hips;Chest;Elbow Left;Elbow Right;Knee Left;Knee Right;Foot Left;Foot Right" %command%
 ```
+
+Calibrate in this order:
+
+1. Run Standable's in-driver T-pose calibration.
+2. Calibrate your avatar in VRChat.
+3. If your proportions look wrong, set VRChat's Avatar Measurement to **Height**, then recalibrate both.
+
+SteamVR and WiVRn cannot own the headset at the same time. Use `vrswitch` to switch between them.
+
+## Troubleshooting
+
+Each item is symptom, cause, and fix.
+
+**VRChat's IK is frozen, or the log shows `Auth: 17777`**
+
+Standable's Steam authentication has no AppID context. The installer writes `steam_appid.txt` (`2370570`) next to `ignition_server.exe`. Updates can remove it. Recreate it, then restart WiVRn. Steam must be logged in.
+
+**No OpenXR app can start a session (`ipc_client_check_git_tag` mismatch)**
+
+The server and the runtime libraries came from different builds. Re-run `./install.sh`, or set `IPC_IGNORE_VERSION=1` for the app.
+
+**The Standable GUI says "SteamVR is missing"**
+
+Expected. There is no Windows SteamVR; the installer posts shims for the paths Standable probes. Check `game.log` rather than the dialog.
+
+**"error 305", or the driver will not load**
+
+An orphaned `ignition_server` process is holding the shared-memory bridge. Run `vrswitch wivrn` (or `vrswitch steamvr`), which clears them first.
+
+**VRChat opens in desktop mode**
+
+The `PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1` launch option is missing. Add the launch options from Run above.
+
+**Trackers do not appear in VRChat**
+
+`XRIZER_TRACKER_SERIALS` is unset or does not match the 8 proxies. Set it exactly as shown, semicolon-separated, with no extra spaces.
+
+**Elbows are off, or the legs and spine look inverted**
+
+The driver is using its default 105 cm height because no calibration has completed, or VRChat's Avatar Measurement is Arm Span instead of Height. Hold a true side-to-side T-pose until the driver clicks twice, set VRChat's measurement to Height, then recalibrate both.
+
+**Standable floor or chaperone: "Failed to read chaperone file"**
+
+The Proton prefix is missing the emulated SteamVR paths. Re-run `./install.sh`.
+
+**The WiVRn service is stuck in "failed"**
+
+The service hit its stop timeout. Run `vrswitch wivrn` or `vrswitch steamvr`; both reset it.
+
+**Reading logs**
+
+- Driver and pose feed: `journalctl --user -u wivrn | grep "steamvr_lh driver"`
+- VRChat: `output_log.txt` in the game's `_data` directory
+
+## How it works
+
+Standable ships as a Windows SteamVR driver (`bin/win64/driver_standable.dll`) and cannot load into WiVRn directly. This port hosts the real driver inside WiVRn:
+
+```
+VRChat
+  |  OpenVR
+xrizer                    OpenVR to OpenXR bridge used by VRChat
+  |  OpenXR
+WiVRn runtime (libopenxr_wivrn.so)
+  |  steamvr_lh OpenVR host (patched)
+libdriver_ignition.so     Linux shim that presents itself as a SteamVR driver
+  |  shared-memory IPC (ignition_bridge.dll)
+ignition_server.exe       Windows process under Proton
+  |  IVRDriverContext / IVRServerDriverHost
+driver_standable.dll      the real Standable driver
+```
+
+A body-estimation driver reads the headset and controllers through `IVRServerDriverHost::GetRawTrackedDevicePoses`. The `steamvr_lh` patch (`patches/monado/0013-*.patch`) adds feeder devices so the hosted driver sees device 0 as the HMD and devices 1 and 2 as the controllers, the same indexing SteamVR uses. Standable then estimates the body and exposes 8 proxy trackers (Hips, Chest, Elbow L/R, Knee L/R, Foot L/R), which VRChat reads through xrizer.
+
+The `steamvr_lh` host is enabled by the systemd drop-in installed by `install.sh`:
+
+| Setting | Meaning |
+| --- | --- |
+| `WIVRN_USE_STEAMVR_LH=1` | use the OpenVR host inside WiVRn |
+| `LH_LOAD_STANDABLE=1` | load the Ignition shim and Standable |
+| `LH_LOAD_LIGHTHOUSE=0` | do not drive real base stations |
+| `LH_DISCOVER_WAIT_MS=30000` | wait for the driver to enumerate its devices |
+
+The Standable driver itself is proprietary and is not included here. The port installer configures the Proton prefix and the Windows-path emulation it needs.
 
 ## Uninstall
 
@@ -77,19 +150,14 @@ IPC_IGNORE_VERSION=1 PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_S
 ./uninstall.sh
 ```
 
-## Notes / Known issues
+## Layout
 
-- Calibrate in this order: in-driver T-pose first (sets height/floor), then
-  VRChat avatar calibration. If proportions look wrong (straight legs when
-  crouching), VRChat Avatar Measurement must be **Height**, not Arm Span,
-  then recalibrate both.
-- SteamVR owns the headset; WiVRn and SteamVR are mutually exclusive. `vrswitch`
-  handles the handoff.
-
-## How it works
-
-See [docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md).
-
-## Troubleshooting
-
-See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+| Path | Purpose |
+| --- | --- |
+| `install.sh`, `uninstall.sh` | install and remove the WiVRn side |
+| `patches/wivrn/`, `patches/monado/` | the patch series applied to upstream WiVRn and Monado |
+| `wivrn-rev` | pinned upstream WiVRn tag |
+| `vendor/` | Ignition shim binaries loaded by `steamvr_lh` |
+| `src/steamvr_lh/` | reference copy of the pose-feed host code |
+| `tools/vrswitch` | switch the OpenXR and OpenVR runtime between WiVRn and SteamVR |
+| `tools/reap-ignition.sh` | remove orphaned Ignition shim processes |

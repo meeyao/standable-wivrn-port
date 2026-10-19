@@ -1,0 +1,387 @@
+diff --git a/server/CMakeLists.txt b/server/CMakeLists.txt
+index 6dd77fe5..23a26b42 100644
+--- a/server/CMakeLists.txt
++++ b/server/CMakeLists.txt
+@@ -132,6 +132,7 @@ if (WIVRN_BUILD_SERVER)
+ 			driver/wivrn_fb_face2_tracker.cpp
+ 			driver/wivrn_htc_face_tracker.cpp
+ 			driver/wivrn_generic_tracker.cpp
++			driver/wivrn_standable_body_tracker.cpp
+ 			driver/wivrn_uinput.cpp
+ 			driver/wivrn_session.cpp
+ 			driver/wivrn_connection.cpp
+diff --git a/server/driver/wivrn_session.cpp b/server/driver/wivrn_session.cpp
+index 28a5cad4..d77ad9c3 100644
+--- a/server/driver/wivrn_session.cpp
++++ b/server/driver/wivrn_session.cpp
+@@ -63,6 +63,7 @@
+ 
+ #if WIVRN_FEATURE_STEAMVR_LIGHTHOUSE
+ #include "steamvr_lh_interface.h"
++#include "wivrn_standable_body_tracker.h"
+ #endif
+ 
+ #if WIVRN_FEATURE_SOLARXR
+@@ -154,6 +155,7 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
+ 		U_LOG_W("Disregard lighthousedb / chaperone related error messages from the lighthouse driver. These are irrelevant in case of WiVRn.");
+ 		U_LOG_W("If getting a SIGSEGV right after this, you are likely using an unsupported SteamVR version!");
+ 		U_LOG_W("=====================");
++		steamvr_lh_set_feeder_devices(&hmd, &left_controller, &right_controller);
+ 		if (steamvr_lh_create_devices(nullptr, &lhdevs) == XRT_SUCCESS)
+ 		{
+ 			for (int i = 0; i < lhdevs->static_xdev_count; i++)
+@@ -186,12 +188,85 @@ wivrn::wivrn_session::wivrn_session(std::unique_ptr<wivrn_connection> connection
+ 						}
+ 						break;
+ 					default:
++						// Map the Standable driver's 8 proxies to
++						// XR_HTCX_vive_tracker_interaction roles so
++						// OpenXR clients (VRChat FBT) can bind them.
++						{
++							int32_t * role_idx = nullptr;
++							enum xrt_device_name * role_profile = nullptr;
++							xrt_device ** proxy_out = nullptr;
++							const char * serial = lhdev->serial;
++							if (strcmp(serial, "Hips") == 0)
++							{
++								role_idx = &roles.waist;
++								role_profile = &roles.waist_profile;
++								proxy_out = &standable_proxies[0];
++							}
++							else if (strcmp(serial, "Chest") == 0)
++							{
++								role_idx = &roles.chest;
++								role_profile = &roles.chest_profile;
++								proxy_out = &standable_proxies[1];
++							}
++							else if (strcmp(serial, "Foot Left") == 0)
++							{
++								role_idx = &roles.left_foot;
++								role_profile = &roles.left_foot_profile;
++								proxy_out = &standable_proxies[2];
++							}
++							else if (strcmp(serial, "Foot Right") == 0)
++							{
++								role_idx = &roles.right_foot;
++								role_profile = &roles.right_foot_profile;
++								proxy_out = &standable_proxies[3];
++							}
++							else if (strcmp(serial, "Knee Left") == 0)
++							{
++								role_idx = &roles.left_knee;
++								role_profile = &roles.left_knee_profile;
++								proxy_out = &standable_proxies[4];
++							}
++							else if (strcmp(serial, "Knee Right") == 0)
++							{
++								role_idx = &roles.right_knee;
++								role_profile = &roles.right_knee_profile;
++								proxy_out = &standable_proxies[5];
++							}
++							else if (strcmp(serial, "Elbow Left") == 0)
++							{
++								role_idx = &roles.left_elbow;
++								role_profile = &roles.left_elbow_profile;
++								proxy_out = &standable_proxies[6];
++							}
++							else if (strcmp(serial, "Elbow Right") == 0)
++							{
++								role_idx = &roles.right_elbow;
++								role_profile = &roles.right_elbow_profile;
++								proxy_out = &standable_proxies[7];
++							}
++							if (role_idx != nullptr && *role_idx < 0)
++							{
++								*role_idx = static_xdev_count;
++								*role_profile = XRT_DEVICE_VIVE_TRACKER;
++								*proxy_out = lhdev;
++							}
++						}
+ 						break;
+ 				}
+ 				static_xdevs[static_xdev_count++] = lhdev;
+ 			}
+ 		}
+ 	}
++
++	if (use_steamvr_lh && std::all_of(std::begin(standable_proxies), std::end(standable_proxies), [](xrt_device * p) { return p != nullptr; }))
++	{
++		// Expose the 8 Standable proxies as an XR_FB_body_tracking skeleton
++		// (the same path SolarXR uses for SlimeVR) so VRChat FBT sees them.
++		standable_body = std::make_unique<wivrn::standable_body_tracker>(
++		        standable_proxies[0], standable_proxies[1], standable_proxies[6], standable_proxies[7], standable_proxies[4], standable_proxies[5], standable_proxies[2], standable_proxies[3]);
++		static_roles.body = standable_body.get();
++		static_xdevs[static_xdev_count++] = static_roles.body;
++	}
+ #endif
+ 	if (get_info().eye_gaze || is_forced_extension("EXT_eye_gaze_interaction"))
+ 	{
+diff --git a/server/driver/wivrn_session.h b/server/driver/wivrn_session.h
+index cd253bb5..9b9fc0ac 100644
+--- a/server/driver/wivrn_session.h
++++ b/server/driver/wivrn_session.h
+@@ -37,9 +37,12 @@
+ #include "wivrn_htc_face_tracker.h"
+ #include "wivrn_ipc.h"
+ #include "wivrn_packets.h"
++#include "wivrn_standable_body_tracker.h"
+ #include "wivrn_uinput.h"
+ #include "xrt/xrt_results.h"
++
+ #include "xrt/xrt_system.h"
++#include <array>
+ #include <map>
+ #include <memory>
+ #include <mutex>
+@@ -83,8 +86,21 @@ class wivrn_session : public xrt_system_devices
+ 	        .left = -1,
+ 	        .right = -1,
+ 	        .gamepad = -1,
++	        .waist = -1,
++	        .chest = -1,
++	        .left_foot = -1,
++	        .right_foot = -1,
++	        .left_knee = -1,
++	        .right_knee = -1,
++	        .left_elbow = -1,
++	        .right_elbow = -1,
+ 	};
+ 
++	// The 8 Standable proxy devices (Hips, Chest, Foot L/R, Knee L/R, Elbow L/R),
++	// matched by serial in the steamvr_lh device loop.
++	std::array<xrt_device *, 8> standable_proxies{};
++	std::unique_ptr<wivrn::standable_body_tracker> standable_body;
++
+ 	tracking_control control;
+ 
+ 	wivrn_hmd hmd;
+diff --git a/server/driver/wivrn_standable_body_tracker.cpp b/server/driver/wivrn_standable_body_tracker.cpp
+new file mode 100644
+index 00000000..bb9aba6e
+--- /dev/null
++++ b/server/driver/wivrn_standable_body_tracker.cpp
+@@ -0,0 +1,170 @@
++#include "wivrn_standable_body_tracker.h"
++
++#include "util/u_device_id.h"
++#include "xrt/xrt_defines.h"
++
++#include <cstring>
++
++namespace wivrn
++{
++namespace
++{
++xrt_result_t
++read_proxy_pose(struct xrt_device * proxy, int64_t at_timestamp_ns, struct xrt_space_relation * out_relation)
++{
++	if (proxy == nullptr || proxy->get_tracked_pose == nullptr)
++	{
++		return XRT_ERROR_POSE_NOT_ACTIVE;
++	}
++	return proxy->get_tracked_pose(proxy, XRT_INPUT_GENERIC_TRACKER_POSE, at_timestamp_ns, out_relation);
++}
++} // namespace
++
++xrt_result_t
++standable_body_tracker::body_joints(struct xrt_device * xdev,
++                                    enum xrt_input_name body_tracking_type,
++                                    int64_t desired_timestamp_ns,
++                                    struct xrt_body_joint_set * out_value)
++{
++	auto * self = static_cast<standable_body_tracker *>(xdev);
++
++	struct xrt_body_joint_location_fb * fb_joints = nullptr;
++	uint32_t fb_count = 0;
++	struct xrt_body_joint_location_fb * meta_joints = nullptr;
++	uint32_t meta_count = 0;
++
++	switch (body_tracking_type)
++	{
++		case XRT_INPUT_FB_BODY_TRACKING:
++			fb_joints = out_value->body_joint_set_fb.joint_locations;
++			fb_count = ARRAY_SIZE(out_value->body_joint_set_fb.joint_locations);
++			break;
++		case XRT_INPUT_META_FULL_BODY_TRACKING:
++			meta_joints = out_value->full_body_joint_set_meta.joint_locations;
++			meta_count = ARRAY_SIZE(out_value->full_body_joint_set_meta.joint_locations);
++			break;
++		default:
++			return XRT_ERROR_NOT_IMPLEMENTED;
++	}
++
++	out_value->base_body_joint_set_meta.sample_time_ns = desired_timestamp_ns;
++	out_value->base_body_joint_set_meta.confidence = 1.f;
++	out_value->base_body_joint_set_meta.skeleton_changed_count = 1;
++	out_value->base_body_joint_set_meta.is_active = true;
++
++	for (uint32_t i = 0; i < fb_count; ++i)
++	{
++		fb_joints[i].relation = xrt_space_relation{};
++	}
++	for (uint32_t i = 0; i < meta_count; ++i)
++	{
++		meta_joints[i].relation = xrt_space_relation{};
++	}
++
++	const struct
++	{
++		xrt_device * proxy;
++		uint32_t fb_index;
++		uint32_t meta_index;
++	} joints[] = {
++	        {self->hip, XRT_BODY_JOINT_HIPS_FB, 0},
++	        {self->chest, XRT_BODY_JOINT_CHEST_FB, 0},
++	        {self->elbow_left, XRT_BODY_JOINT_LEFT_ARM_LOWER_FB, 0},
++	        {self->elbow_right, XRT_BODY_JOINT_RIGHT_ARM_LOWER_FB, 0},
++	        {self->knee_left, 0, XRT_FULL_BODY_JOINT_LEFT_LOWER_LEG_META},
++	        {self->knee_right, 0, XRT_FULL_BODY_JOINT_RIGHT_LOWER_LEG_META},
++	        {self->foot_left, 0, XRT_FULL_BODY_JOINT_LEFT_FOOT_TRANSVERSE_META},
++	        {self->foot_right, 0, XRT_FULL_BODY_JOINT_RIGHT_FOOT_TRANSVERSE_META},
++	};
++
++	for (const auto & j: joints)
++	{
++		if (j.proxy == nullptr)
++		{
++			continue;
++		}
++		struct xrt_space_relation relation = xrt_space_relation{};
++		if (read_proxy_pose(j.proxy, desired_timestamp_ns, &relation) != XRT_SUCCESS)
++		{
++			continue;
++		}
++		if ((relation.relation_flags & XRT_SPACE_RELATION_ORIENTATION_VALID_BIT) == 0)
++		{
++			continue;
++		}
++		if (fb_joints != nullptr && j.fb_index != 0 && j.fb_index < fb_count)
++		{
++			fb_joints[j.fb_index].relation = relation;
++		}
++		if (meta_joints != nullptr && j.meta_index != 0 && j.meta_index < meta_count)
++		{
++			meta_joints[j.meta_index].relation = relation;
++		}
++	}
++
++	out_value->body_pose = xrt_space_relation{
++	        .relation_flags = (xrt_space_relation_flags)(XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_POSITION_VALID_BIT |
++	                                                     XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT),
++	        .pose = XRT_POSE_IDENTITY,
++	};
++
++	return XRT_SUCCESS;
++}
++
++void standable_body_tracker::destroy(struct xrt_device * xdev)
++{
++	delete static_cast<standable_body_tracker *>(xdev);
++}
++
++xrt_result_t
++standable_body_tracker::update_inputs(struct xrt_device * xdev)
++{
++	return XRT_SUCCESS;
++}
++
++standable_body_tracker::standable_body_tracker(xrt_device * hip,
++                                               xrt_device * chest,
++                                               xrt_device * elbow_left,
++                                               xrt_device * elbow_right,
++                                               xrt_device * knee_left,
++                                               xrt_device * knee_right,
++                                               xrt_device * foot_left,
++                                               xrt_device * foot_right) :
++        xrt_device{
++                .id = u_device_id_generate(),
++                .name = XRT_DEVICE_VIVE_TRACKER,
++                .device_type = XRT_DEVICE_TYPE_BODY_TRACKER,
++                .tracking_origin = hip != nullptr ? hip->tracking_origin : (elbow_left != nullptr ? elbow_left->tracking_origin : nullptr),
++                .supported = {.orientation_tracking = true, .position_tracking = true},
++                .update_inputs = &standable_body_tracker::update_inputs,
++                .get_body_joints = &standable_body_tracker::body_joints,
++                .destroy = &standable_body_tracker::destroy,
++        },
++        hip(hip),
++        chest(chest),
++        elbow_left(elbow_left),
++        elbow_right(elbow_right),
++        knee_left(knee_left),
++        knee_right(knee_right),
++        foot_left(foot_left),
++        foot_right(foot_right)
++{
++	strlcpy(str, "WiVRn Standable body tracker", sizeof(str));
++	strlcpy(serial, "wivrn-standable-body", sizeof(serial));
++}
++
++standable_body_tracker::~standable_body_tracker() = default;
++
++xrt_device *
++standable_body_tracker::create(xrt_device * hip,
++                               xrt_device * chest,
++                               xrt_device * elbow_left,
++                               xrt_device * elbow_right,
++                               xrt_device * knee_left,
++                               xrt_device * knee_right,
++                               xrt_device * foot_left,
++                               xrt_device * foot_right)
++{
++	return new standable_body_tracker(hip, chest, elbow_left, elbow_right, knee_left, knee_right, foot_left, foot_right);
++}
++} // namespace wivrn
+\ No newline at end of file
+diff --git a/server/driver/wivrn_standable_body_tracker.h b/server/driver/wivrn_standable_body_tracker.h
+new file mode 100644
+index 00000000..b9b2c8c3
+--- /dev/null
++++ b/server/driver/wivrn_standable_body_tracker.h
+@@ -0,0 +1,46 @@
++#pragma once
++
++#include "xrt/xrt_device.h"
++
++namespace wivrn
++{
++class standable_body_tracker : public xrt_device
++{
++	// The 8 Standable proxy devices (from steamvr_lh), matched by serial.
++	xrt_device * hip;
++	xrt_device * chest;
++	xrt_device * elbow_left;
++	xrt_device * elbow_right;
++	xrt_device * knee_left;
++	xrt_device * knee_right;
++	xrt_device * foot_left;
++	xrt_device * foot_right;
++
++	static xrt_result_t body_joints(struct xrt_device * xdev,
++	                                enum xrt_input_name body_tracking_type,
++	                                int64_t desired_timestamp_ns,
++	                                struct xrt_body_joint_set * out_value);
++	static xrt_result_t update_inputs(struct xrt_device * xdev);
++	static void destroy(struct xrt_device * xdev);
++
++public:
++	standable_body_tracker(xrt_device * hip,
++	                       xrt_device * chest,
++	                       xrt_device * elbow_left,
++	                       xrt_device * elbow_right,
++	                       xrt_device * knee_left,
++	                       xrt_device * knee_right,
++	                       xrt_device * foot_left,
++	                       xrt_device * foot_right);
++	~standable_body_tracker();
++
++	static xrt_device * create(xrt_device * hip,
++	                           xrt_device * chest,
++	                           xrt_device * elbow_left,
++	                           xrt_device * elbow_right,
++	                           xrt_device * knee_left,
++	                           xrt_device * knee_right,
++	                           xrt_device * foot_left,
++	                           xrt_device * foot_right);
++};
++} // namespace wivrn
+\ No newline at end of file

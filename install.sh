@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Standable WiVRn Linux Port installer.
 #
-# Runs the external port installer (Standable + Proton prefix side), then
-# installs the WiVRn runtime/server and the systemd user drop-in that enables
-# steamvr_lh driver hosting. Idempotent.
+# Runs the external port installer (Standable + Proton prefix side), then builds
+# upstream WiVRn + the Standable patch series and installs the systemd user
+# drop-in that enables steamvr_lh driver hosting. Idempotent.
 set -euo pipefail
 
 REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -13,9 +13,10 @@ REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # --- overridable configuration ---------------------------------------------
 PORT_INSTALLER_REPO="${PORT_INSTALLER_REPO:-https://github.com/meeyao/standable-linux-port}"
 PORT_INSTALLER_REF="${PORT_INSTALLER_REF:-}"   # empty = repo default branch
-WIVRN_REPO="${WIVRN_REPO:-https://github.com/meeyao/wivrn-standable-port}"
-WIVRN_REF="${WIVRN_REF:-main}"
-REPO_RELEASE_BASE="${REPO_RELEASE_BASE:-https://github.com/meeyao/standable-wivrn-port/releases/latest/download}"
+# Upstream WiVRn + our patch series (patches/wivrn, patches/monado). The pinned
+# ref lives in wivrn-rev; overriding WIVRN_REF is for testing new upstream tags.
+WIVRN_REPO="${WIVRN_REPO:-https://github.com/WiVRn/WiVRn}"
+WIVRN_REF="${WIVRN_REF:-$(cat "$REPO_DIR/wivrn-rev" 2>/dev/null || echo master)}"
 
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$INVOKING_HOME/.config}"
 XDG_DATA_HOME="${XDG_DATA_HOME:-$INVOKING_HOME/.local/share}"
@@ -28,7 +29,6 @@ OPENXR_DIR="/usr/share/openxr/1"
 REAPER_SRC="$REPO_DIR/tools/reap-ignition.sh"
 REAPER_BIN="/usr/local/bin/reap-ignition"
 
-MODE="prebuilt"
 SKIP_PORT_INSTALLER=0
 
 # --- output helpers ---------------------------------------------------------
@@ -36,17 +36,14 @@ usage() {
     cat <<'EOF'
 Usage: install.sh [options]
 
-  --prebuilt              install WiVRn from the latest release (default)
-  --source                clone and build the WiVRn fork
   --skip-port-installer   do not run the external Standable/Proton installer
   -h, --help              show this help
 
 Environment:
   PORT_INSTALLER_REPO     default https://github.com/meeyao/standable-linux-port
   PORT_INSTALLER_REF      git ref, default: repo default branch
-  WIVRN_REPO              default https://github.com/meeyao/wivrn-standable-port
-  WIVRN_REF               default main
-  REPO_RELEASE_BASE       prebuilt download base URL
+  WIVRN_REPO              default https://github.com/WiVRn/WiVRn (upstream)
+  WIVRN_REF               default: the pinned tag in ./wivrn-rev
 EOF
 }
 
@@ -150,65 +147,58 @@ EOF
 
 # The Monado shared object is built with SONAME libmonado_wivrn.so.25, so the
 # loader needs both the versioned name and the unversioned .so symlink.
-install_monado_lib() {
-    local src="$1"
-    run_root install -d "$WIVRN_LIBDIR"
-    run_root install -m 0644 "$src" "$WIVRN_LIBDIR/libmonado_wivrn.so.0.0.0"
-    run_root ln -sf libmonado_wivrn.so.0.0.0 "$WIVRN_LIBDIR/libmonado_wivrn.so.25"
-    run_root ln -sf libmonado_wivrn.so.0.0.0 "$WIVRN_LIBDIR/libmonado_wivrn.so"
-}
-
-install_prebuilt() {
-    say "WiVRn: prebuilt artifacts from $REPO_RELEASE_BASE"
-    require curl
-    require sha256sum
-    local tmp
-    tmp="$(mktemp -d)"
-    local f
-    for f in libopenxr_wivrn.so libmonado_wivrn.so.0.0.0 wivrn-server SHA256SUMS; do
-        if ! curl -fL --retry 3 -o "$tmp/$f" "$REPO_RELEASE_BASE/$f"; then
-            rm -rf "$tmp"
-            return 1
-        fi
-    done
-    if ! ( cd "$tmp" && sha256sum -c SHA256SUMS ); then
-        rm -rf "$tmp"
-        return 1
-    fi
-    run_root install -d "$WIVRN_LIBDIR" "$WIVRN_BINDIR"
-    run_root install -m 0644 "$tmp/libopenxr_wivrn.so" "$WIVRN_LIBDIR/libopenxr_wivrn.so"
-    install_monado_lib "$tmp/libmonado_wivrn.so.0.0.0"
-    run_root install -m 0755 "$tmp/wivrn-server" "$WIVRN_BINDIR/wivrn-server"
-    write_openxr_json
-    rm -rf "$tmp"
-}
-
 install_source() {
-    say "WiVRn: building from source ($WIVRN_REPO @ $WIVRN_REF)"
+    say "WiVRn: building upstream $WIVRN_REPO @ $WIVRN_REF + Standable patch series"
     require git
     if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
         print_build_deps
         die "cmake/ninja missing"
     fi
+    check_wivrn_runtime_deps
     local src="$CACHE_DIR/wivrn"
     if [ -d "$src/.git" ]; then
         git -C "$src" fetch --depth 1 origin "$WIVRN_REF"
         git -C "$src" checkout --detach FETCH_HEAD
     else
         git clone --depth 1 --branch "$WIVRN_REF" "$WIVRN_REPO" "$src"
+        git -C "$src" checkout --detach FETCH_HEAD 2>/dev/null || true
     fi
-    # The fork carries the steamvr_lh pose-feed patch and the HTCX tracker patch.
-    # WiVRn fetches its pinned Monado via FetchContent; the fork's pinned-rev tree
-    # already contains the steamvr_lh changes, so no patch application is needed.
+    # Deterministic re-runs: drop any previously applied series before reapplying.
+    git -C "$src" reset --hard >/dev/null
+    git -C "$src" clean -fd >/dev/null
+
+    # WiVRn-tree changes (server/driver proxies + session wiring) apply directly.
+    local p
+    for p in "$REPO_DIR"/patches/wivrn/*.patch; do
+        say "applying $(basename "$p")"
+        git -C "$src" apply --index "$p" || die "failed to apply $(basename "$p") to $WIVRN_REF"
+    done
+    # Monado changes ride WiVRn's own FetchContent patch step: drop them in the
+    # tree's patches/monado/ so apply.sh picks them up alongside upstream's.
+    say "installing Monado patch series (applied by WiVRn FetchContent)"
+    cp -f "$REPO_DIR"/patches/monado/*.patch "$src/patches/monado/"
     cmake -S "$src" -B "$src/build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr
     cmake --build "$src/build"
-    # WiVRn's own install rules place the runtime manifest and libs in the
-    # expected layout (/usr/lib/wivrn, /usr/share/openxr/1).
+    # WiVRn's install rules place the server, libs, unit file and manifest in the
+    # expected layout (/usr/bin, /usr/lib/wivrn, /usr/lib/systemd/user, /usr/share/openxr/1).
     run_root cmake --install "$src/build"
     # Ensure the runtime manifest points at the installed Monado lib.
     write_openxr_json
+}
+
+# wivrn-server links libopenvr_api.so (Arch: openvr), a system dependency of
+# WiVRn, not something the installer ships.
+check_wivrn_runtime_deps() {
+    if command -v ldconfig >/dev/null 2>&1 && ! ldconfig -p 2>/dev/null | grep -q 'libopenvr_api\.so'; then
+        warn "libopenvr_api.so not found; wivrn-server will fail to load."
+        case "$(detect_distro)" in
+            arch)   say "  install: sudo pacman -S --needed openvr" ;;
+            debian) say "  install: sudo apt install libopenvr-api (or the WiVRn build deps)" ;;
+            *)      say "  install the OpenVR API library (libopenvr_api.so)." ;;
+        esac
+    fi
 }
 
 # --- systemd drop-in --------------------------------------------------------
@@ -308,7 +298,7 @@ Next steps:
   2. Reconnect the headset, launch VRChat with the options above.
 
 Logs: journalctl --user -u wivrn | grep "steamvr_lh driver"
-Check install: ./tools/doctor.sh (when present) or vrswitch status
+Status: vrswitch status
 EOF
 }
 
@@ -316,7 +306,8 @@ install_user_env() {
     # Manager-level env for apps the server spawns as transient units
     # (WayVR dashboard): the IPC tag bypass must be in the user manager env,
     # service drop-ins do not propagate to spawned units.
-    local d="$XDG_CONFIG_HOME/environment.d" f="$d/wivrn-ipc.conf"
+    local d="$XDG_CONFIG_HOME/environment.d"
+    local f="$d/wivrn-ipc.conf"
     mkdir -p "$d"
     cat >"$f" <<'EOF'
 # Bypass Monado IPC git-tag check (server/libs may come from different
@@ -379,8 +370,6 @@ check_vrchat_launch_options() {
 # --- main -------------------------------------------------------------------
 while [ $# -gt 0 ]; do
     case "$1" in
-        --prebuilt) MODE="prebuilt" ;;
-        --source) MODE="source" ;;
         --skip-port-installer) SKIP_PORT_INSTALLER=1 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown argument: $1 (try --help)" ;;
@@ -399,14 +388,7 @@ else
     warn "skipping port installer; the Standable/Proton side must already be set up"
 fi
 
-if [ "$MODE" = "prebuilt" ]; then
-    if ! install_prebuilt; then
-        warn "prebuilt download failed; falling back to source build"
-        install_source
-    fi
-else
-    install_source
-fi
+install_source
 
 install_reaper
 install_dropin

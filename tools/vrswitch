@@ -16,6 +16,13 @@ STEAMVR_APPID="250820"
 
 die() { echo "error: $*" >&2; exit 1; }
 
+# Point the OpenXR active runtime at a manifest. The loader dir does not exist
+# on a fresh machine, and `ln` under `set -e` would abort the whole switch.
+link_runtime() {
+  mkdir -p "$(dirname "$RUNTIME_LINK")"
+  ln -sfn "$1" "$RUNTIME_LINK"
+}
+
 current() {
   local target
   target="$(readlink -f "$RUNTIME_LINK" 2>/dev/null || true)"
@@ -127,7 +134,7 @@ case "${1:-status}" in
   wivrn|w)
     # Set the runtime first: if a cleanup step stalls, the critical state is
     # already correct instead of half-switched.
-    ln -sfn "$WIVRN_MANIFEST" "$RUNTIME_LINK"
+    link_runtime "$WIVRN_MANIFEST"
     set_openvr_runtime "$XRIZER_DIR"
     systemctl --user reset-failed wivrn.service 2>/dev/null || true
     stop_steamvr
@@ -138,7 +145,7 @@ case "${1:-status}" in
   steamvr|s|steam)
     # Runtime + drivers first (critical), cleanup last (best-effort).
     ensure_external_drivers
-    ln -sfn "$STEAMVR_MANIFEST" "$RUNTIME_LINK"
+    link_runtime "$STEAMVR_MANIFEST"
     set_openvr_runtime "$STEAMVR_DIR"
     systemctl --user stop wivrn.service 2>/dev/null || true
     pkill -x wivrn-server 2>/dev/null || true

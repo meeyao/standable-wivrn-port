@@ -1,0 +1,48 @@
+From 90f83fba67372179aed2d0b711fa736ee6b516eb Mon Sep 17 00:00:00 2001
+From: meeyao <139587960+meeyao@users.noreply.github.com>
+Date: Fri, 4 Sep 2026 20:16:35 +0400
+Subject: [PATCH] d/steamvr_lh: load Standable Ignition shim
+ (LH_LOAD_STANDABLE)
+
+Host the real Standable FBE driver under the steamvr_lh OpenVR host, same
+pattern as psvr2-linux-steam-lh. Adds LH_LOAD_STANDABLE (loads the Ignition
+shim from the Standable install dir) and LH_LOAD_LIGHTHOUSE (default on).
+Regenerated against the current monado pin f037264d2, which already provides
+the RunFrame thread, in_setup guard and body/hand trackers.
+---
+ src/xrt/drivers/steamvr_lh/steamvr_lh.cpp | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp b/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
+index 033bb57b0..fe6530c64 100644
+--- a/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
++++ b/src/xrt/drivers/steamvr_lh/steamvr_lh.cpp
+@@ -87,6 +87,8 @@ namespace {
+ 
+ DEBUG_GET_ONCE_LOG_OPTION(lh_log, "LIGHTHOUSE_LOG", U_LOGGING_INFO)
+ DEBUG_GET_ONCE_BOOL_OPTION(lh_load_slimevr, "LH_LOAD_SLIMEVR", false)
++DEBUG_GET_ONCE_BOOL_OPTION(lh_load_lighthouse, "LH_LOAD_LIGHTHOUSE", true)
++DEBUG_GET_ONCE_BOOL_OPTION(lh_load_standable, "LH_LOAD_STANDABLE", false)
+ DEBUG_GET_ONCE_NUM_OPTION(lh_discover_wait_ms, "LH_DISCOVER_WAIT_MS", 3000)
+ DEBUG_GET_ONCE_FLOAT_OPTION(lh_stick_deadzone, "LH_STICK_DEADZONE", 0)
+ 
+@@ -1038,11 +1040,15 @@ steamvr_lh_create_devices(struct xrt_prober *xp, struct xrt_system_devices **out
+ 		}
+ 		return true;
+ 	};
+-	if (!loadDriver("/drivers/lighthouse/bin/" OVR_PLAT_SUBDIR "/driver_lighthouse" OVR_PLAT_EXT, true))
++	if (debug_get_bool_option_lh_load_lighthouse() &&
++	    !loadDriver("/drivers/lighthouse/bin/" OVR_PLAT_SUBDIR "/driver_lighthouse" OVR_PLAT_EXT, true))
+ 		return xrt_result::XRT_ERROR_DEVICE_CREATION_FAILED;
+ 	if (debug_get_bool_option_lh_load_slimevr() &&
+ 	    !loadDriver("/drivers/slimevr/bin/" OVR_PLAT_SUBDIR "/driver_slimevr" OVR_PLAT_EXT, false))
+ 		return xrt_result::XRT_ERROR_DEVICE_CREATION_FAILED;
++	if (debug_get_bool_option_lh_load_standable() &&
++	    !loadDriver("/../Standable Full Body Estimation/bin/" OVR_PLAT_SUBDIR "/driver_standable" OVR_PLAT_EXT, true))
++		return xrt_result::XRT_ERROR_DEVICE_CREATION_FAILED;
+ 	svrs->ctx = Context::create(STEAM_INSTALL_DIR, steamvr, std::move(drivers));
+ 	if (svrs->ctx == nullptr)
+ 		return xrt_result::XRT_ERROR_DEVICE_CREATION_FAILED;
+-- 
+2.55.0
+
