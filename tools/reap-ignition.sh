@@ -65,11 +65,11 @@ declare -A WINE_HELPER=()
 cand="$(awk '
   FNR == 1 { pid = FILENAME; sub(/\/comm$/, "", pid); sub(/^.*\//, "", pid) }
   /^(ignition_server|wineserver|wivrn-server)/ { print pid }
-' /proc/[0-9]*/comm 2>/dev/null)"
+' /proc/[0-9]*/comm 2>/dev/null)" || true
 wine_cand="$(awk '
   FNR == 1 { pid = FILENAME; sub(/\/comm$/, "", pid); sub(/^.*\//, "", pid) }
   /^(wineboot|services|winedevice|plugplay|rpcss|explorer|svchost|conhost)(\.exe)?$/ { print pid }
-' /proc/[0-9]*/comm 2>/dev/null)"
+' /proc/[0-9]*/comm 2>/dev/null)" || true
 for pid in $cand; do
   cmd="$( { tr '\0' ' ' < "/proc/$pid/cmdline"; } 2>/dev/null )" || continue
   case "$cmd" in
@@ -83,7 +83,7 @@ done
 wrapper_cand="$(awk '
   FNR == 1 { pid = FILENAME; sub(/\/comm$/, "", pid); sub(/^.*\//, "", pid) }
   /^start\.exe$/ || /^bash$/ { print pid }
-' /proc/[0-9]*/comm 2>/dev/null)"
+' /proc/[0-9]*/comm 2>/dev/null)" || true
 for pid in $wrapper_cand; do
   cmd="$( { tr '\0' ' ' < "/proc/$pid/cmdline"; } 2>/dev/null )" || continue
   case "$cmd" in
