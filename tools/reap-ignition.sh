@@ -40,6 +40,16 @@ done
 
 log() { [ "$QUIET" -eq 1 ] || printf '%s\n' "$*"; }
 
+# Cheap first: during a SteamVR session this timer must do nothing at all.
+# The full scan below costs >1s of CPU and can make SteamVR's 5s compositor
+# startup time out, leaving the "SteamVR has exited" window.
+for _c in /proc/[0-9]*/comm; do
+  if [ "$(cat "$_c" 2>/dev/null)" = "vrserver" ]; then
+    log "reap-ignition: SteamVR is live - leaving the Standable tree alone"
+    exit 0
+  fi
+done
+
 # Single-pass awk over /proc/*/status is ~100x cheaper than a bash loop with a
 # sed+awk per process (986 procs: 0.04s vs 4.7s).
 scan_procs() {
@@ -77,18 +87,17 @@ for pid in $cand; do
   esac
 done
 
-# Wine's start.exe wrapper and the helper itself carry the driver in argv but
-# not in comm. Without them a crashed session leaves one behind and Steam keeps
-# showing the app as running (it waits on the wrapper, not the driver).
+# Wine's start.exe wrapper carries the driver in argv but not in comm, and can
+# outlive the helper. Only this wrapper is matched - never bash, which would
+# also catch unrelated user commands.
 wrapper_cand="$(awk '
   FNR == 1 { pid = FILENAME; sub(/\/comm$/, "", pid); sub(/^.*\//, "", pid) }
-  /^start\.exe$/ || /^bash$/ { print pid }
+  /^start\.exe$/ { print pid }
 ' /proc/[0-9]*/comm 2>/dev/null)" || true
 for pid in $wrapper_cand; do
   cmd="$( { tr '\0' ' ' < "/proc/$pid/cmdline"; } 2>/dev/null )" || continue
   case "$cmd" in
-    *launch_serverhelper.sh*ignition_server*|*start.exe*ignition_server*)
-      CMD_OF[$pid]="$cmd" ;;
+    *start.exe*ignition_server*) CMD_OF[$pid]="$cmd" ;;
   esac
 done
 # Wine helpers: capture comm + WINEPREFIX so we can group by prefix.
@@ -144,26 +153,6 @@ done
 # does not cover it: reaping here kills the live driver and wedges SteamVR's
 # quit (watchdog timeout -> "crashed" state on the next launch). Leave the
 # whole tree alone for the duration of a SteamVR session.
-if [ "$wivrn_count" -eq 0 ]; then
-  for _c in /proc/[0-9]*/comm; do
-    if [ "$(cat "$_c" 2>/dev/null)" = "vrserver" ]; then
-      log "reap-ignition: SteamVR is live - leaving the Standable tree alone"
-      exit 0
-    fi
-  done
-fi
-
-# Also protect the live SteamVR host tree (vrserver/vrmonitor): under SteamVR
-# the Standable shim is a descendant of vrserver, not of wivrn-server. Without
-# this the reaper deleted the live SteamVR-era server (the reason the drop-in
-# timer was paused). Token/session scoping in launch_serverhelper.sh handles
-# spawn dedup; here we just never touch a server a live host is running.
-for pid in "${!PPID_OF[@]}"; do
-  comm="$(cat "/proc/$pid/comm" 2>/dev/null || true)"
-  case "$comm" in
-    vrserver|vrmonitor) mark_descendants "$pid" ;;
-  esac
-done
 
 log "reap-ignition: ${wivrn_count} live wivrn-server, ${#LIVE[@]} protected pids"
 

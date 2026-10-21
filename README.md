@@ -191,6 +191,10 @@ The in-VR dashboard is experimental and needs an OpenComposite/xrizer bridge DLL
 
 Each item is symptom, cause, and fix.
 
+**Auto-calibration in VRChat does nothing**
+
+VRChat OSC is off by default. In VRChat, enable Action Menu → **OSC** → **Enabled**; in Standable, enable **Configure VRChat for Auto Calibration**. Standable sets VRChat's IK-debug-logging and one-handed-calibration params over OSC, so until step 1 they never arrive. `./install.sh --check` reports the log link and the OSC state.
+
 **VRChat's IK is frozen, or the log shows `Auth: 17777`**
 
 Standable's Steam authentication has no AppID context. The installer writes `steam_appid.txt` (`2370570`) next to `ignition_server.exe`. Updates can remove it. Recreate it, then restart WiVRn. Steam must be logged in.
