@@ -71,9 +71,24 @@ wine_cand="$(awk '
   /^(wineboot|services|winedevice|plugplay|rpcss|explorer|svchost|conhost)(\.exe)?$/ { print pid }
 ' /proc/[0-9]*/comm 2>/dev/null)"
 for pid in $cand; do
-  cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)" || continue
+  cmd="$( { tr '\0' ' ' < "/proc/$pid/cmdline"; } 2>/dev/null )" || continue
   case "$cmd" in
     *ignition_server*|*wineserver*|*/wivrn-server*) CMD_OF[$pid]="$cmd" ;;
+  esac
+done
+
+# Wine's start.exe wrapper and the helper itself carry the driver in argv but
+# not in comm. Without them a crashed session leaves one behind and Steam keeps
+# showing the app as running (it waits on the wrapper, not the driver).
+wrapper_cand="$(awk '
+  FNR == 1 { pid = FILENAME; sub(/\/comm$/, "", pid); sub(/^.*\//, "", pid) }
+  /^start\.exe$/ || /^bash$/ { print pid }
+' /proc/[0-9]*/comm 2>/dev/null)"
+for pid in $wrapper_cand; do
+  cmd="$( { tr '\0' ' ' < "/proc/$pid/cmdline"; } 2>/dev/null )" || continue
+  case "$cmd" in
+    *launch_serverhelper.sh*ignition_server*|*start.exe*ignition_server*)
+      CMD_OF[$pid]="$cmd" ;;
   esac
 done
 # Wine helpers: capture comm + WINEPREFIX so we can group by prefix.
@@ -84,7 +99,7 @@ for pid in $wine_cand; do
   case "$comm" in
     wineboot*|services*|winedevice*|plugplay*|rpcss*|explorer*|svchost*|conhost*)
       WINE_HELPER[$pid]="$comm"
-      pre="$(tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -m1 '^STEAM_COMPAT_DATA_PATH=' | cut -d= -f2-)"
+      pre="$( { tr '\0' '\n' < "/proc/$pid/environ"; } 2>/dev/null | grep -m1 '^STEAM_COMPAT_DATA_PATH=' | cut -d= -f2- )" || pre=""
       WINE_PREFIX[$pid]="${pre:-unknown}"
       ;;
   esac
@@ -123,6 +138,20 @@ for pid in "${!CMD_OF[@]}"; do
       mark_descendants "$pid" ;;
   esac
 done
+
+# SteamVR owns the Standable driver whenever vrserver is live. Its helper tree
+# is parented to the Steam client, not to vrserver, so descendant protection
+# does not cover it: reaping here kills the live driver and wedges SteamVR's
+# quit (watchdog timeout -> "crashed" state on the next launch). Leave the
+# whole tree alone for the duration of a SteamVR session.
+if [ "$wivrn_count" -eq 0 ]; then
+  for _c in /proc/[0-9]*/comm; do
+    if [ "$(cat "$_c" 2>/dev/null)" = "vrserver" ]; then
+      log "reap-ignition: SteamVR is live - leaving the Standable tree alone"
+      exit 0
+    fi
+  done
+fi
 
 # Also protect the live SteamVR host tree (vrserver/vrmonitor): under SteamVR
 # the Standable shim is a descendant of vrserver, not of wivrn-server. Without
