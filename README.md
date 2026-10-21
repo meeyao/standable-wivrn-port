@@ -84,6 +84,19 @@ Notes:
   drop-in environment from **How it works**; unpatched WiVRn has no Standable
   devices even though the shim may start.
 
+### Distro WiVRn packages
+
+Fedora and Arch package WiVRn (`wivrn`, `wivrn-server`, `wivrn-dashboard`), and
+those builds work — but they do not contain this port's patches. `install.sh`
+builds its own `wivrn-server` and libraries into `/usr`, overwriting the
+packaged files. A later `dnf upgrade` / `pacman -Syu` of `wivrn` will replace
+them with the stock build and Standable stops loading. Re-run `./install.sh`
+after such an update, or exclude the package (`IgnorePkg = wivrn-server` on
+Arch; `exclude=wivrn` on Fedora).
+
+Keep the packaged `wivrn-dashboard` and xrizer/OpenComposite; the port does not
+replace those.
+
 ## Run
 
 Switch to WiVRn:

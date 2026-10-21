@@ -164,6 +164,13 @@ EOF
 # loader needs both the versioned name and the unversioned .so symlink.
 install_source() {
     say "WiVRn: building upstream $WIVRN_REPO @ $WIVRN_REF + Standable patch series"
+    # The distro package works, but it has none of our patches. A later update
+    # silently restores the stock server, so warn before overwriting it.
+    if command -v pacman >/dev/null 2>&1 && pacman -Qo /usr/bin/wivrn-server >/dev/null 2>&1; then
+        warn "wivrn-server package installed: this build overwrites it, and pacman -Syu will undo it. Re-run ./install.sh after updates, or add 'IgnorePkg = wivrn-server'."
+    elif command -v rpm >/dev/null 2>&1 && rpm -qf /usr/bin/wivrn-server >/dev/null 2>&1; then
+        warn "wivrn package installed: this build overwrites it, and dnf upgrade will undo it. Re-run ./install.sh after updates, or exclude wivrn."
+    fi
     require git
     if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
         print_build_deps
