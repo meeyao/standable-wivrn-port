@@ -19,8 +19,8 @@ Run the real Standable Full Body Estimation SteamVR driver on Linux with WiVRn, 
 - Standable FBE on Steam
 - VRChat on Steam
 - Around 8 GB of free disk space
-- Arch/CachyOS, Debian/Ubuntu, or Fedora. On other distros, install the WiVRn build dependencies yourself; the installer prints the command for Arch, Debian and Fedora when a tool is missing.
-- `libopenvr_api.so` (the `openvr` package on Arch; `libopenvr-api1` or `libopenvr-api2` on Debian/Ubuntu, in `contrib` or `universe`). WiVRn links it, so the build and the runtime both need it. The installer checks for it.
+- Arch/CachyOS or Fedora. Ubuntu 25.10+ also has the required packages but is untested. Ubuntu 24.04 and Debian 13 cannot build this: their Vulkan headers are older than 1.4.304 and/or they have no OpenVR package. The installer prints the dependency command for your distro.
+- `libopenvr_api.so` (the `openvr` package on Arch, `openvr-devel` on Fedora, `libopenvr-dev` on Ubuntu 25.10+, in `universe`). WiVRn links it, so the build and the runtime both need it. The installer checks for it.
 
 ## Install
 
@@ -72,6 +72,9 @@ sudo cmake --install build
 
 Notes:
 
+- Builds verified on Arch/CachyOS (host) and Fedora 42 (container, configure and
+  full build against the pinned tag). Ubuntu 25.10 package names were checked
+  but not built.
 - The Monado patches must be in `patches/monado/` before configure; WiVRn's
   FetchContent step applies them when it checks out Monado.
 - `libopenvr_api.so` must be present at configure time. Without it Monado
@@ -219,11 +222,12 @@ It must run the binary installed by `./install.sh` (`/usr/bin/wivrn-server`).
 Then check the drop-in (Verify step 1). If `~/.local/state/standable/` does not
 exist, `LH_LOAD_STANDABLE=1` never reached the driver.
 
-**Fedora: configure fails on x264, nlohmann_json, or avahi**
+**Fedora: configure fails on x264, nlohmann_json, avahi, or OpenSSL**
 
-`x264-devel` is in RPM Fusion, `nlohmann_json` is Fedora's `json-devel`, and
-avahi's pkg-config files are in `avahi-devel`. Use the dependency command the
-installer prints (see Requirements).
+`x264-devel` is in RPM Fusion, `nlohmann_json` is Fedora's `json-devel`,
+`avahi-glib.pc` is in `avahi-glib-devel` (not `avahi-devel`), and the server
+needs `openssl-devel`. Use the dependency command the installer prints (see
+Requirements).
 
 **Trackers do not appear in VRChat**
 

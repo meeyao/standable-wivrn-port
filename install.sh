@@ -66,35 +66,40 @@ print_build_deps() {
         arch)
             cat <<'EOF'
 WiVRn build deps (Arch/CachyOS):
-  sudo pacman -S --needed base-devel cmake ninja git \
-    vulkan-headers vulkan-icd-loader glslang spirv-tools libglvnd \
-    ffmpeg libx264 pipewire eigen glib2 glib2-devel \
-    nlohmann-json cli11 boost avahi \
+  sudo pacman -S --needed base-devel cmake ninja git python \
+    vulkan-headers vulkan-icd-loader glslang shaderc spirv-tools libglvnd \
+    ffmpeg x264 pipewire eigen glib2 glib2-devel systemd-libs \
+    nlohmann-json cli11 boost avahi libnotify librsvg libarchive libpng openssl openxr \
     libbsd libdrm libxrandr libxcb libx11 wayland wayland-protocols openvr
 EOF
             ;;
         debian)
             cat <<'EOF'
 WiVRn build deps (Debian/Ubuntu):
-  sudo apt install build-essential cmake ninja-build git \
+  sudo apt install build-essential cmake ninja-build git python3 \
     libvulkan-dev glslang-tools spirv-tools libgl-dev \
     libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libx264-dev \
     libpipewire-0.3-dev libeigen3-dev libglib2.0-dev libglib2.0-dev-bin \
     nlohmann-json3-dev libcli11-dev libboost-all-dev \
     libavahi-client-dev libavahi-glib-dev libwayland-dev \
-    libbsd-dev libdrm-dev libxrandr-dev libxcb1-dev libx11-dev libopenvr-api1
+    libssl-dev libnotify-dev librsvg2-dev libarchive-dev libpng-dev libsystemd-dev \
+    libbsd-dev libdrm-dev libxrandr-dev libxcb1-dev libx11-dev libopenxr-dev libopenvr-dev
+
+  WiVRn needs Vulkan headers >= 1.4.304 and an OpenVR package.
+  Ubuntu 25.10+ has both. Ubuntu 24.04 ships Vulkan 1.3, and Debian 13 has no
+  OpenVR package; those need newer Vulkan headers / OpenVR built by hand.
 EOF
             ;;
         fedora)
             cat <<'EOF'
 WiVRn build deps (Fedora):
   sudo dnf install gcc-c++ make cmake ninja-build git \
-    vulkan-loader-devel vulkan-headers glslang spirv-tools libglvnd-devel \
+    vulkan-loader-devel vulkan-headers glslang glslc spirv-tools libglvnd-devel \
     libavcodec-free-devel libavutil-free-devel libdrm-devel \
     pipewire-devel eigen3-devel glib2-devel json-devel cli11-devel boost-devel \
-    avahi-devel libnotify-devel librsvg2-devel libarchive-devel libpng-devel \
+    avahi-devel avahi-glib-devel libnotify-devel librsvg2-devel libarchive-devel libpng-devel \
     systemd-devel libXrandr-devel libxcb-devel libX11-devel wayland-devel \
-    wayland-protocols-devel openxr-devel openvr-devel libbsd-devel python3
+    wayland-protocols-devel openxr-devel openvr-devel libbsd-devel python3 openssl-devel
 
 x264-devel comes from RPM Fusion:
   sudo dnf install x264-devel
