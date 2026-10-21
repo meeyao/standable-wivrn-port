@@ -56,6 +56,7 @@ detect_distro() {
     case " $id $like " in
         *" arch "*|*" archlinux "*|*" cachyos "*) echo arch ;;
         *" debian "*|*" ubuntu "*|*" linuxmint "*) echo debian ;;
+        *" fedora "*|*" rhel "*|*" centos "*) echo fedora ;;
         *) echo unknown ;;
     esac
 }
@@ -82,6 +83,21 @@ WiVRn build deps (Debian/Ubuntu):
     nlohmann-json3-dev libcli11-dev libboost-all-dev \
     libavahi-client-dev libavahi-glib-dev libwayland-dev \
     libbsd-dev libdrm-dev libxrandr-dev libxcb1-dev libx11-dev libopenvr-api1
+EOF
+            ;;
+        fedora)
+            cat <<'EOF'
+WiVRn build deps (Fedora):
+  sudo dnf install gcc-c++ make cmake ninja-build git \
+    vulkan-loader-devel vulkan-headers glslang spirv-tools libglvnd-devel \
+    libavcodec-free-devel libavutil-free-devel libdrm-devel \
+    pipewire-devel eigen3-devel glib2-devel json-devel cli11-devel boost-devel \
+    avahi-devel libnotify-devel librsvg2-devel libarchive-devel libpng-devel \
+    systemd-devel libXrandr-devel libxcb-devel libX11-devel wayland-devel \
+    wayland-protocols-devel openxr-devel openvr-devel libbsd-devel python3
+
+x264-devel comes from RPM Fusion:
+  sudo dnf install x264-devel
 EOF
             ;;
         *)

@@ -19,7 +19,7 @@ Run the real Standable Full Body Estimation SteamVR driver on Linux with WiVRn, 
 - Standable FBE on Steam
 - VRChat on Steam
 - Around 8 GB of free disk space
-- Arch/CachyOS or Debian/Ubuntu. On other distros, provide the WiVRn build dependencies (the installer prints them if a required tool is missing)
+- Arch/CachyOS, Debian/Ubuntu, or Fedora. On other distros, install the WiVRn build dependencies yourself; the installer prints the command for Arch, Debian and Fedora when a tool is missing.
 - `libopenvr_api.so` (the `openvr` package on Arch; `libopenvr-api1` or `libopenvr-api2` on Debian/Ubuntu, in `contrib` or `universe`). WiVRn links it, so the build and the runtime both need it. The installer checks for it.
 
 ## Install
@@ -49,6 +49,38 @@ The Standable/Proton installer is vendored in `port/`, so this repo installs
 without cloning the SteamVR port. `port/UPSTREAM` records what it came from and
 the local WiVRn changes.
 
+## Build from source
+
+`./install.sh` is the supported path. It installs the Standable/Proton side
+from `port/`, builds WiVRn at the tag in `wivrn-rev` with the patches in
+`patches/`, installs it under `/usr`, and writes the drop-in. It does **not**
+install distro packages: install the dependencies first (the installer prints
+the right command for your distro when a tool is missing).
+
+The build it runs is equivalent to:
+
+```sh
+git clone --depth 1 --branch "$(cat wivrn-rev)" https://github.com/WiVRn/WiVRn wivrn
+cd wivrn
+git apply ../standable-wivrn-port/patches/wivrn/*.patch
+cp ../standable-wivrn-port/patches/monado/*.patch patches/monado/
+cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_INSTALL_PREFIX=/usr
+cmake --build build
+sudo cmake --install build
+```
+
+Notes:
+
+- The Monado patches must be in `patches/monado/` before configure; WiVRn's
+  FetchContent step applies them when it checks out Monado.
+- `libopenvr_api.so` must be present at configure time. Without it Monado
+  disables OpenVR support and the `steamvr_lh` host this port needs.
+- Installing replaces the system `wivrn-server` and runtime libraries. If you
+  run your own WiVRn build instead, it must include these patches and the
+  drop-in environment from **How it works**; unpatched WiVRn has no Standable
+  devices even though the shim may start.
+
 ## Run
 
 Switch to WiVRn:
@@ -70,6 +102,58 @@ Calibrate in this order:
 3. If your proportions look wrong, set VRChat's Avatar Measurement to **Height**, then recalibrate both.
 
 SteamVR and WiVRn cannot own the headset at the same time. Use `vrswitch` to switch between them.
+
+## Verify the install
+
+Work through this in order; each step isolates one layer.
+
+1. The drop-in is installed and enables the host:
+
+   ```sh
+   systemctl --user cat wivrn.service | grep -E 'STEAMVR_LH|LH_LOAD|STANDABLE_GUI'
+   ```
+
+   Expect `WIVRN_USE_STEAMVR_LH=1`, `LH_LOAD_STANDABLE=1`, `STANDABLE_GUI=1`.
+
+2. The runtime is switched: `vrswitch status` shows WiVRn for OpenXR and
+   `/opt/xrizer` for OpenVR.
+
+3. Start WiVRn and connect the headset, then check the driver log:
+
+   ```sh
+   grep -E 'Auth:|DeviceManager|Received: S_UPD' ~/.local/state/standable/server.out
+   ```
+
+   `Auth: 1` and `[DeviceManager] Total: 3` (headset plus both controllers).
+   `Auth: 17777` means the AppID file is missing.
+
+4. The 8 proxies exist:
+
+   ```sh
+   journalctl --user -u wivrn | grep 'lighthouse tracker'
+   ```
+
+5. The GUI was started with the driver:
+
+   ```sh
+   grep 'spawning GUI' ~/.local/state/standable/serverhelper.log
+   ```
+
+6. Launch VRChat from Steam with the launch options above; the 8 trackers
+   appear in VRChat's Trackers menu.
+
+The vendored installer also has a doctor for the Standable/Proton side:
+
+```sh
+./port/install.sh --check
+```
+
+It appends a system dump to `~/.local/state/standable/install.log`, which is
+useful when asking for help.
+
+If step 1 prints nothing, the drop-in did not install; re-run `./install.sh`.
+If step 3 has no log at all, the driver never loaded; check
+`journalctl --user -u wivrn` for `steamvr_lh`.
 
 ## Standable GUI
 
@@ -120,6 +204,26 @@ An orphaned `ignition_server` process is holding the shared-memory bridge. Run `
 **VRChat opens in desktop mode**
 
 The `PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1` launch option is missing. Add the launch options from Run above.
+
+**The logs mention Standable, but there are no trackers and no GUI**
+
+The shim started, but the `steamvr_lh` host never loaded Standable. Usual cause:
+the running `wivrn-server` is a different build (your own, a distro package, or
+an old install), so the patches and the drop-in do not apply.
+
+```sh
+systemctl --user show -p ExecStart wivrn.service
+```
+
+It must run the binary installed by `./install.sh` (`/usr/bin/wivrn-server`).
+Then check the drop-in (Verify step 1). If `~/.local/state/standable/` does not
+exist, `LH_LOAD_STANDABLE=1` never reached the driver.
+
+**Fedora: configure fails on x264, nlohmann_json, or avahi**
+
+`x264-devel` is in RPM Fusion, `nlohmann_json` is Fedora's `json-devel`, and
+avahi's pkg-config files are in `avahi-devel`. Use the dependency command the
+installer prints (see Requirements).
 
 **Trackers do not appear in VRChat**
 
@@ -212,6 +316,7 @@ The Standable driver itself is proprietary and is not included here. The port in
 | Path | Purpose |
 | --- | --- |
 | `install.sh`, `uninstall.sh` | install and remove the WiVRn side |
+| `port/` | vendored Standable/Proton installer (`port/UPSTREAM` has its origin) |
 | `patches/wivrn/`, `patches/monado/` | the patch series applied to upstream WiVRn and Monado |
 | `wivrn-rev` | pinned upstream WiVRn tag |
 | `vendor/` | Ignition shim binaries loaded by `steamvr_lh` |
