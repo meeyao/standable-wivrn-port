@@ -229,6 +229,12 @@ An orphaned `ignition_server` process is holding the shared-memory bridge. Run `
 
 The `PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1` launch option is missing. Add the launch options from Run above.
 
+**`vrswitch status` says OpenXR runtime: unknown**
+
+WiVRn removes the active-runtime symlink when it starts. If you restarted the
+service manually after `vrswitch wivrn`, run `vrswitch wivrn` again to restore
+it.
+
 **The logs mention Standable, but there are no trackers and no GUI**
 
 The shim started, but the `steamvr_lh` host never loaded Standable. Usual cause:
