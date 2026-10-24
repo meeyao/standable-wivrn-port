@@ -373,6 +373,9 @@ EOF
 }
 
 print_next_steps() {
+    if user_systemctl is-active --quiet wivrn 2>/dev/null; then
+        warn "wivrn.service is running the old build; restart it: systemctl --user restart wivrn && vrswitch wivrn"
+    fi
     cat <<EOF
 
 Done.
