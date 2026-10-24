@@ -113,6 +113,17 @@ stop_steamvr() {
   done
 }
 
+# Standable's ignition_server.exe survives its host runtime shutting down and
+# then holds the bridge, so the other runtime's shim fails with "error 305".
+kill_ignition() {
+  if command -v reap-ignition >/dev/null 2>&1; then
+    reap-ignition --quiet --kill || true
+  else
+    pkill -x ignition_server 2>/dev/null || true
+  fi
+  sleep 1
+}
+
 start_steamvr() {
   command -v steam >/dev/null 2>&1 || die "steam command not found"
   nohup steam "steam://rungameid/$STEAMVR_APPID" >/dev/null 2>&1 &
