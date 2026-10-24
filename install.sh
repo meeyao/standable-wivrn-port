@@ -11,7 +11,7 @@ REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 . "$REPO_DIR/tools/lib.sh"
 
 # --- overridable configuration ---------------------------------------------
-PORT_INSTALLER_DIR="$REPO_DIR/port"   # vendored Standable/Proton installer
+PORT_INSTALLER_DIR="$REPO_DIR/installer"   # vendored Standable/Proton installer
 # Upstream WiVRn + our patch series (patches/wivrn, patches/monado). The pinned
 # ref lives in wivrn-rev; overriding WIVRN_REF is for testing new upstream tags.
 WIVRN_REPO="${WIVRN_REPO:-https://github.com/WiVRn/WiVRn}"
@@ -23,28 +23,91 @@ XDG_CACHE_HOME="${XDG_CACHE_HOME:-$INVOKING_HOME/.cache}"
 CACHE_DIR="$XDG_CACHE_HOME/standable-wivrn-port"
 
 WIVRN_LIBDIR="/usr/lib/wivrn"
+# xrizer release used when the distro has no package (Fedora uses @xr-sig).
+XRIZER_VERSION="0.6"
+XRIZER_URL="https://github.com/Supreeeme/xrizer/releases/download/v${XRIZER_VERSION}/xrizer-v${XRIZER_VERSION}.zip"
+XRIZER_SHA256="9b2105433e48a20f789e20a14113dbd98650afd116bd232419725a4438dd2149"
+# WayVR centers the playspace/floor, which Standable needs for calibration.
 WIVRN_BINDIR="/usr/bin"
 OPENXR_DIR="/usr/share/openxr/1"
 REAPER_SRC="$REPO_DIR/tools/reap-ignition.sh"
 REAPER_BIN="/usr/local/bin/reap-ignition"
 
-SKIP_PORT_INSTALLER=0
+DO_PORT=1
+DO_WIVRN=1
+DO_XRIZER=1
+DO_GUI=0
+DO_REAPER=0
+ASSUME_YES=0
 INSTALL_DEPS=0
-WIVRN_CMAKE_X264=()
+XRIZER_INSTALLED=0
+XRIZER_KIND=found
+MANIFEST_DIR="$INVOKING_HOME/.local/state/standable-wivrn"
+MANIFEST="$MANIFEST_DIR/installed"
+PREV_XRIZER_INSTALLED=0
+PREV_XRIZER_KIND=found
+if [ -f "$MANIFEST" ]; then
+    while IFS='=' read -r _k _v; do
+        case "$_k" in
+            xrizer_installed) PREV_XRIZER_INSTALLED="$_v" ;;
+            xrizer_kind) PREV_XRIZER_KIND="$_v" ;;
+        esac
+    done <"$MANIFEST"
+fi
 
 # --- output helpers ---------------------------------------------------------
 usage() {
     cat <<'EOF'
 Usage: install.sh [options]
 
+  --yes                   accept the default component selection
   --skip-port-installer   do not run the vendored Standable/Proton installer
+  --skip-wivrn            do not build WiVRn (use an existing patched build)
+  --skip-xrizer           do not install xrizer (VRChat will not see trackers)
+  --skip-gui              do not install the standalone GUI launcher
+  --skip-reaper           do not install the background orphan timer
   --install-deps          install the WiVRn build dependencies for this distro
   -h, --help              show this help
+
+Without --yes, a short checklist lets you toggle optional components.
 
 Environment:
   WIVRN_REPO              default https://github.com/WiVRn/WiVRn (upstream)
   WIVRN_REF               default: the pinned tag in ./wivrn-rev
 EOF
+}
+
+# --- component selection ----------------------------------------------------
+choose_components() {
+    [ "$ASSUME_YES" -eq 1 ] && return 0
+    [ -t 0 ] || return 0
+    local choice n
+    while true; do
+        printf '\nStandable WiVRn installer\n'
+        printf '  1) [%s] Standable / Proton setup (Steam shims, prefix, driver hook)\n' "$([ "$DO_PORT" -eq 1 ] && echo x || echo ' ')"
+        printf '  2) [%s] Patched WiVRn build (server + runtime)\n' "$([ "$DO_WIVRN" -eq 1 ] && echo x || echo ' ')"
+        printf '  3) [%s] xrizer (OpenVR runtime)\n' "$([ "$DO_XRIZER" -eq 1 ] && echo x || echo ' ')"
+        printf '  4) [%s] Standalone GUI launcher (helper already starts the GUI)\n' "$([ "$DO_GUI" -eq 1 ] && echo x || echo ' ')"
+        printf '  5) [%s] Background orphan timer (start/stop cleanup stays on)\n' "$([ "$DO_REAPER" -eq 1 ] && echo x || echo ' ')"
+        printf '\n  Numbers toggle, Enter installs, q quits.\n'
+        read -r -p '> ' choice || die "aborted"
+        case "$choice" in
+            "") break ;;
+            q|Q) die "aborted" ;;
+            *)
+                for n in $choice; do
+                    case "$n" in
+                        1) DO_PORT=$((1 - DO_PORT)) ;;
+                        2) DO_WIVRN=$((1 - DO_WIVRN)) ;;
+                        3) DO_XRIZER=$((1 - DO_XRIZER)) ;;
+                        4) DO_GUI=$((1 - DO_GUI)) ;;
+                        5) DO_REAPER=$((1 - DO_REAPER)) ;;
+                        *) warn "no component $n" ;;
+                    esac
+                done
+                ;;
+        esac
+    done
 }
 
 # --- path discovery ---------------------------------------------------------
@@ -59,7 +122,8 @@ detect_distro() {
     case " $id $like " in
         *" arch "*|*" archlinux "*|*" cachyos "*) echo arch ;;
         *" debian "*|*" ubuntu "*|*" linuxmint "*) echo debian ;;
-        *" fedora "*|*" rhel "*|*" centos "*) echo fedora ;;
+        *" rhel "*|*" centos "*|*" rocky "*|*" almalinux "*) echo unknown ;;
+        *" fedora "*) echo fedora ;;
         *) echo unknown ;;
     esac
 }
@@ -127,8 +191,12 @@ install_build_deps() {
         fedora)
             run_root dnf install -y "${DEPS_FEDORA[@]}"
             if ! pkg-config --exists x264 2>/dev/null; then
+                say "enabling RPM Fusion free for x264-devel"
+                run_root dnf install -y \
+                    "https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+                    || die "could not enable RPM Fusion; install x264-devel manually"
                 run_root dnf install -y "${DEPS_FEDORA_EXTRA[@]}" \
-                    || warn "x264-devel not installed (enable RPM Fusion); continuing without the x264 encoder"
+                    || die "x264-devel not available; WiVRn needs an encoder to start a session"
             fi
             ;;
         *) print_build_deps; die "unknown distro; install the deps above" ;;
@@ -141,15 +209,10 @@ check_build_deps() {
     for t in cmake ninja git pkg-config gdbus-codegen glslangValidator spirv-opt python3; do
         command -v "$t" >/dev/null 2>&1 || missing+=("$t")
     done
-    for m in libavcodec libavutil libdrm libpipewire-0.3 avahi-client avahi-glib \
+    for m in libavcodec libavutil libdrm x264 libpipewire-0.3 avahi-client avahi-glib \
              glib-2.0 gio-2.0 libnotify librsvg-2.0 libarchive libpng openssl libsystemd; do
         pkg-config --exists "$m" 2>/dev/null || missing+=("pkgconfig($m)")
     done
-    # x264 is optional: hardware encoders (VAAPI/NVENC/Vulkan) still work.
-    if ! pkg-config --exists x264 2>/dev/null; then
-        warn "x264 not found (Fedora: x264-devel is in RPM Fusion); building without the x264 encoder"
-        WIVRN_CMAKE_X264=(-DWIVRN_USE_X264=OFF)
-    fi
     for f in /usr/include/boost/version.hpp /usr/include/eigen3/Eigen/Core \
              /usr/include/nlohmann/json.hpp /usr/include/CLI/CLI.hpp; do
         [ -e "$f" ] || missing+=("$f")
@@ -171,7 +234,7 @@ check_build_deps() {
 }
 
 # --- vendored Ignition bytes ------------------------------------------------
-# Kept for verification and offline reference. port/vendor ships its own copy
+# Kept for verification and offline reference. installer/vendor ships its own copy
 # of the same pinned bytes, so we check ours match the expected hashes.
 verify_vendor() {
     local sums="$REPO_DIR/vendor/SHA256SUMS"
@@ -182,8 +245,8 @@ verify_vendor() {
 }
 
 # --- Standable / Proton side (vendored installer) ---------------------------
-# port/ is a self-contained copy of the Standable/Proton installer, so this repo
-# does not depend on another repo at install time. See port/UPSTREAM for the
+# installer/ is a self-contained copy of the Standable/Proton installer, so this repo
+# does not depend on another repo at install time. See installer/UPSTREAM for the
 # commit it was taken from.
 run_port_installer() {
     say "port installer: Standable + Proton prefix side"
@@ -251,7 +314,7 @@ install_source() {
     cmake -S "$src" -B "$src/build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
         -DCMAKE_INSTALL_PREFIX=/usr \
-        ${WIVRN_CMAKE_X264[@]+"${WIVRN_CMAKE_X264[@]}"}
+        -DWIVRN_USE_X264=ON
     cmake --build "$src/build"
     # WiVRn's install rules place the server, libs, unit file and manifest in the
     # expected layout (/usr/bin, /usr/lib[64]/wivrn, /usr/lib/systemd/user,
@@ -262,6 +325,83 @@ install_source() {
     fi
     # Ensure the runtime manifest points at the installed Monado lib.
     write_openxr_json
+}
+
+# xrizer is the OpenVR -> OpenXR runtime VRChat uses; without it the 8 proxies
+# are invisible. Fedora packages it in the @xr-sig COPR, Arch in the AUR; fall
+# back to the pinned upstream release so the port is self-contained.
+find_xrizer() {
+    local d
+    for d in /opt/xrizer /usr/lib64/xrizer/runtime /usr/lib/xrizer/runtime; do
+        [ -f "$d/bin/linux64/vrclient.so" ] && { echo "$d"; return 0; }
+    done
+    return 1
+}
+
+install_xrizer() {
+    local found
+    found="$(find_xrizer || true)"
+    if [ -n "$found" ]; then
+        say "xrizer: found $found"
+        if [ "$PREV_XRIZER_INSTALLED" = "1" ]; then
+            XRIZER_KIND="$PREV_XRIZER_KIND"
+            XRIZER_INSTALLED=1
+        else
+            XRIZER_KIND=found
+            XRIZER_INSTALLED=0
+        fi
+        return 0
+    fi
+
+    case "$(detect_distro)" in
+        fedora)
+            say "xrizer: installing from the @xr-sig COPR"
+            if ! dnf copr --help >/dev/null 2>&1; then
+                run_root dnf install -y dnf5-plugins \
+                    || run_root dnf install -y dnf-plugins-core || true
+            fi
+            if run_root dnf -y copr enable @xr-sig/xrizer >/dev/null 2>&1 \
+                && run_root dnf install -y xrizer >/dev/null 2>&1; then
+                found="$(find_xrizer || true)"
+                [ -n "$found" ] && { say "xrizer: installed at $found"; XRIZER_KIND=copr; XRIZER_INSTALLED=1; return 0; }
+            fi
+            warn "xrizer COPR install failed; falling back to the pinned release"
+            ;;
+        arch)
+            if run_root pacman -S --needed --noconfirm xrizer >/dev/null 2>&1; then
+                found="$(find_xrizer || true)"
+                [ -n "$found" ] && { say "xrizer: installed at $found"; XRIZER_KIND=pacman; XRIZER_INSTALLED=1; return 0; }
+            fi
+            warn "xrizer is not in the Arch repos (AUR: xrizer-git); falling back to the pinned release"
+            ;;
+    esac
+
+    say "xrizer: installing pinned release $XRIZER_VERSION to /opt/xrizer"
+    require curl
+    mkdir -p "$CACHE_DIR"
+    local zip="$CACHE_DIR/xrizer-v$XRIZER_VERSION.zip"
+    if [ ! -f "$zip" ]; then
+        curl -fL --retry 3 -o "$zip" "$XRIZER_URL" || die "could not download $XRIZER_URL"
+    fi
+    printf '%s  %s\n' "$XRIZER_SHA256" "$zip" | sha256sum -c - >/dev/null \
+        || die "xrizer download checksum mismatch"
+    local tmp
+    tmp="$(mktemp -d)"
+    python3 -m zipfile -e "$zip" "$tmp" || die "could not extract $zip"
+    run_root install -d /opt/xrizer/bin/linux64
+    run_root install -m 755 "$tmp/xrizer-v$XRIZER_VERSION/bin/linux64/vrclient.so" \
+        /opt/xrizer/bin/linux64/vrclient.so || die "could not install xrizer"
+    run_root tee /opt/xrizer/openvrpaths.vrpath >/dev/null <<'EOF'
+{
+  "jsonid": "vrpathreg",
+  "runtime": ["/opt/xrizer"],
+  "version": 1
+}
+EOF
+    rm -rf "$tmp"
+    XRIZER_KIND=release
+    XRIZER_INSTALLED=1
+    say "xrizer: installed at /opt/xrizer"
 }
 
 # wivrn-server links libopenvr_api.so (Arch: openvr), a build and runtime
@@ -328,6 +468,10 @@ Environment=IPC_IGNORE_VERSION=1
 # reap-ignition now protects the live host tree in BOTH modes (a running
 # wivrn-server, or vrserver/vrmonitor under SteamVR), so it is safe to run.
 ExecStartPre=-/usr/local/bin/reap-ignition --quiet --kill
+# wivrn-server deletes the active-runtime symlink at startup. Restore it after
+# it has done that, so OpenXR apps still find WiVRn after a service restart
+# (otherwise vrswitch status says "unknown" and WayVR/VRChat cannot start).
+ExecStartPost=-/bin/sh -c 'sleep 3; mkdir -p "%h/.config/openxr/1" && ln -sfn /usr/share/openxr/1/openxr_wivrn.json "%h/.config/openxr/1/active_runtime.json"'
 ExecStopPost=-/usr/local/bin/reap-ignition --quiet --kill
 EOF
     if [ "$(id -u)" -eq 0 ] && [ "$INVOKING_USER" != "root" ]; then
@@ -341,8 +485,9 @@ EOF
     # keeps removing shims/wineservers that are not in the live wivrn-server
     # tree, without touching an active session.
     local tdir="$XDG_CONFIG_HOME/systemd/user"
-    mkdir -p "$tdir"
-    cat >"$tdir/wivrn-reap.service" <<'EOF'
+    if [ "$DO_REAPER" -eq 1 ]; then
+        mkdir -p "$tdir"
+        cat >"$tdir/wivrn-reap.service" <<'EOF'
 [Unit]
 Description=Reap orphaned Standable/Ignition shim processes
 
@@ -350,7 +495,7 @@ Description=Reap orphaned Standable/Ignition shim processes
 Type=oneshot
 ExecStart=/usr/local/bin/reap-ignition --quiet --kill
 EOF
-    cat >"$tdir/wivrn-reap.timer" <<'EOF'
+        cat >"$tdir/wivrn-reap.timer" <<'EOF'
 [Unit]
 Description=Periodically reap orphaned Standable/Ignition shims
 
@@ -362,13 +507,26 @@ AccuracySec=5s
 [Install]
 WantedBy=timers.target
 EOF
+        if command -v systemctl >/dev/null 2>&1; then
+            user_systemctl daemon-reload || true
+            # reap-ignition protects the live host tree in both modes now, so
+            # the periodic sweeper is safe to enable.
+            user_systemctl enable --now wivrn-reap.timer >/dev/null 2>&1 || true
+            say "wivrn-reap.timer installed and enabled"
+        fi
+    else
+        if command -v systemctl >/dev/null 2>&1; then
+            user_systemctl disable --now wivrn-reap.timer >/dev/null 2>&1 || true
+        fi
+        rm -f "$tdir/wivrn-reap.service" "$tdir/wivrn-reap.timer"
+        say "background reaper disabled"
+    fi
+}
 
-    if command -v systemctl >/dev/null 2>&1; then
-        user_systemctl daemon-reload || true
-        # reap-ignition protects the live host tree in both modes now, so the
-        # periodic sweeper is safe to enable.
-        user_systemctl enable --now wivrn-reap.timer >/dev/null 2>&1 || true
-        say "wivrn-reap.timer installed and enabled"
+# WayVR belongs to another project. Warn if it is missing; never install it.
+check_optional_apps() {
+    if ! command -v wayvr >/dev/null 2>&1; then
+        warn "WayVR not found (optional): install it to center the playspace/floor; without it Standable falls back to 105 cm"
     fi
 }
 
@@ -518,10 +676,33 @@ EOF
     say "GUI launcher: $INVOKING_HOME/.local/bin/standable-gui-wivrn"
 }
 
+# Record what this install owns, so uninstall.sh can offer the same choices.
+write_manifest() {
+    mkdir -p "$MANIFEST_DIR"
+    {
+        echo "version=1"
+        echo "installed_at=$(date -Iseconds)"
+        echo "port=$DO_PORT"
+        echo "wivrn=$DO_WIVRN"
+        echo "xrizer=$DO_XRIZER"
+        echo "xrizer_kind=$XRIZER_KIND"
+        echo "xrizer_installed=$XRIZER_INSTALLED"
+        echo "gui=$DO_GUI"
+        echo "reaper=$DO_REAPER"
+        echo "wiring=1"
+    } > "$MANIFEST"
+    say "manifest: $MANIFEST"
+}
+
 # --- main -------------------------------------------------------------------
 while [ $# -gt 0 ]; do
     case "$1" in
-        --skip-port-installer) SKIP_PORT_INSTALLER=1 ;;
+        --yes) ASSUME_YES=1 ;;
+        --skip-port-installer) DO_PORT=0 ;;
+        --skip-wivrn) DO_WIVRN=0 ;;
+        --skip-xrizer) DO_XRIZER=0 ;;
+        --skip-gui) DO_GUI=0 ;;
+        --skip-reaper) DO_REAPER=0 ;;
         --install-deps) INSTALL_DEPS=1 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown argument: $1 (try --help)" ;;
@@ -533,28 +714,45 @@ say "repo: $REPO_DIR"
 mkdir -p "$CACHE_DIR"
 
 verify_vendor
+choose_components
 
-# Check (or install) the build deps before touching the Standable/Proton side:
-# a failed build used to leave users with a half-configured prefix.
-if [ "$INSTALL_DEPS" -eq 1 ]; then
-    say "installing WiVRn build deps"
-    install_build_deps
+say "components: port=$DO_PORT wivrn=$DO_WIVRN xrizer=$DO_XRIZER gui=$DO_GUI reaper=$DO_REAPER"
+if [ "$DO_XRIZER" -eq 0 ] && ! find_xrizer >/dev/null 2>&1; then
+    warn "xrizer is not installed; VRChat will not see the Standable trackers (re-enable component 3 or install xrizer)"
 fi
-check_build_deps
 
-if [ "$SKIP_PORT_INSTALLER" -eq 0 ]; then
+if [ "$DO_WIVRN" -eq 1 ]; then
+    # Check (or install) the build deps before touching the Standable/Proton
+    # side: a failed build used to leave a half-configured prefix.
+    if [ "$INSTALL_DEPS" -eq 1 ]; then
+        say "installing WiVRn build deps"
+        install_build_deps
+    fi
+    check_build_deps
+fi
+
+if [ "$DO_PORT" -eq 1 ]; then
     run_port_installer
 else
     warn "skipping port installer; the Standable/Proton side must already be set up"
 fi
 
-install_source
+if [ "$DO_WIVRN" -eq 1 ]; then
+    install_source
+else
+    warn "skipping WiVRn build; the running server must already contain the port patches"
+fi
 
+[ "$DO_XRIZER" -eq 1 ] && install_xrizer
 install_reaper
+
 install_dropin
 install_user_env
 install_vrswitch
-install_gui_launcher
+[ "$DO_GUI" -eq 1 ] && install_gui_launcher
+
 ensure_steam_appid
 check_vrchat_launch_options
+write_manifest
+check_optional_apps
 print_next_steps

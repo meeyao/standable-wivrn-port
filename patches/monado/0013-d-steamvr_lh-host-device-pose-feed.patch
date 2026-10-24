@@ -76,7 +76,7 @@ index 8346bedee..ffdaa0b88 100644
 -	    {rot.v[2], rot.v[5], rot.v[8], head.pose.position.z},
 -	}};
 +
-+	xrt_device *devices[3] = {feed_head, feed_left, feed_right};
++	xrt_device *devices[3] = {feed_head ? feed_head : this->hmd, feed_left, feed_right};
 +	// Standable derives the T-pose arm angle from the controllers' positions
 +	// relative to the head. Dynamic head-yaw removal is OFF by default: it
 +	// rotates the arm line on head turns, which lets a front-back pose pass

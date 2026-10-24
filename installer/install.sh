@@ -25,6 +25,20 @@ say()  { printf '\033[1;32m==>\033[0m %s\n' "$*";  _log ">>> $*"; }
 warn() { printf '\033[1;33m ->\033[0m %s\n' "$*";  _log "WARN $*"; }
 die()  { printf '\033[1;31mERROR:\033[0m %s\n' "$*" >&2; _log "ERROR $*"; exit 1; }
 _log() { [ -n "${LOG_FILE:-}" ] && printf '%s\n' "$*" >> "$LOG_FILE"; }
+restore_or_remove() { # restore newest .bak-* or remove the deployed file
+    local f b
+    for f in "$@"; do
+        b="$(ls -1t "$f".bak-* 2>/dev/null | head -1)"
+        if [ -n "$b" ]; then
+            run mv -f "$b" "$f"
+            [ -n "$DRY_RUN" ] || say "restored $f from backup"
+        else
+            run rm -fv "$f"
+        fi
+        run rm -f "$f".bak-*
+    done
+}
+
 bak()  { # bak <file> - timestamped backup before overwrite (keeps newest 2)
     if [ -n "$DRY_RUN" ]; then
         [ -f "$1" ] && printf '\033[1;36m # \033[0mcp -n %s %s.bak-%s\n' "$1" "$1" "$STAMP"
@@ -1184,7 +1198,14 @@ if [ "${1:-}" = "--uninstall" ]; then
     run rm -fv "$HOME/.local/share/icons/standable.png"
     run rm -fv "$PFX/drive_c/vr_bootstrap.exe" "$PFX/drive_c/regq.txt" "$PFX/drive_c/typetest.txt"
     run rm -fv "$PFX/dosdevices/s:"
-    run rm -fv "$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"   # VRChat log link (auto-calibration)
+    # VRChat log link (auto-calibration): only remove the symlink we made.
+    _vr="$PFX/drive_c/users/steamuser/AppData/LocalLow/VRChat"
+    if [ -L "$_vr" ]; then
+        run rm -fv "$_vr"
+    elif [ -e "$_vr" ]; then
+        warn "leaving real directory $_vr"
+    fi
+    unset _vr
     # Prefix shims: we created this Steam tree (fresh prefixes have none), so
     # restore any pre-existing file from our .bak, else remove the stub.
     for _shim in vrpathreg.exe vrmonitor.exe; do
@@ -1201,10 +1222,11 @@ if [ "${1:-}" = "--uninstall" ]; then
     # Deployed vrclient copies (Proton maintains this dir too - removing ours
     # is harmless either way).
     run rm -fv "$PFX/drive_c/vrclient/bin"/vrclient*.dll*
-    # Everything the installer added under bin/linux64, plus our .bak files.
-    # Untouched: the game's own files (Standable.exe, openvr_api.dll,
-    # vrclient_x64.dll, and bin/win64/driver_standable.dll).
-    run rm -fv "$GAME_DIR/bin/linux64/driver_standable.so" \
+    # Everything the installer replaced under bin/, restoring the original
+    # stub/file from .bak when there is one. Untouched: Standable.exe,
+    # openvr_api.dll, vrclient_x64.dll, bin/win64/driver_standable.dll.
+    restore_or_remove \
+        "$GAME_DIR/bin/linux64/driver_standable.so" \
         "$GAME_DIR/bin/linux64/ignition_server.exe" \
         "$GAME_DIR/bin/linux64/ignition_bridge.dll" \
         "$GAME_DIR/bin/linux64/launch_serverhelper.sh" \
@@ -1216,18 +1238,6 @@ if [ "${1:-}" = "--uninstall" ]; then
         "$GAME_DIR/bin/linux64/proton_resolve.sh" \
         "$GAME_DIR/bin/linux64/sweep.sh" \
         "$GAME_DIR/bin/linux64/win_vrpath.sh"
-    run rm -f "$GAME_DIR/bin/linux64"/driver_standable.so.bak-* \
-        "$GAME_DIR/bin/linux64"/ignition_server.exe.bak-* \
-        "$GAME_DIR/bin/linux64"/ignition_bridge.dll.bak-* \
-        "$GAME_DIR/bin/linux64"/launch_serverhelper.sh.bak-* \
-        "$GAME_DIR/bin/linux64"/ignition.json.bak-* \
-        "$GAME_DIR/bin/linux64"/wine_psvr2_hidraw.reg.bak-* \
-        "$GAME_DIR/bin/linux64"/steam_api64.dll.bak-* \
-        "$GAME_DIR/bin/win64"/steam_api64.dll.bak-* \
-        "$GAME_DIR/bin/linux64"/python3.bak-* \
-        "$GAME_DIR/bin/linux64"/proton_resolve.sh.bak-* \
-        "$GAME_DIR/bin/linux64"/sweep.sh.bak-* \
-        "$GAME_DIR/bin/linux64"/win_vrpath.sh.bak-*
     # vrpath seed: strip our entries (Linux path and S:\ form), keep the rest.
     if [ -n "$DRY_RUN" ]; then
         printf '\033[1;36m # \033[0mpython3 removes Standable entries from ~/.config/openvr/openvrpaths.vrpath\n'
@@ -1277,10 +1287,11 @@ for ln in lines:
 if dropped:
     open(p, 'wb').write(b'\n'.join(out))
     print("  removed SteamPath from user.reg")
+else:
+    print("  no SteamPath in the main Valve/Steam section")
 PYEOF
-        if grep -aq '"SteamPath"' "$PFX/user.reg" 2>/dev/null; then
-            warn "SteamPath still present - remove it manually: regedit, HKCU\\Software\\Valve\\Steam"
-        fi
+        # Do not grep globally here: Steam writes its own SteamPath in the
+        # ActiveProcess subsection, which is not ours to remove.
     fi
     # Restore the user's original SteamVR settings (backed up before our
     # first boot-time modification), and drop the crash-timestamp trigger.
@@ -1499,17 +1510,31 @@ if command -v ldd >/dev/null 2>&1; then
 fi
 
 say "Installing launchers…"
+sed_escape() { printf '%s' "$1" | sed -e 's/[\\&|]/\\&/g'; }
+
 gen() { # gen <template> <dest> - substitute placeholders, write dest
     S_TARGET="${S_TARGET:-$S_ROOT}"
     if [ -n "$DRY_RUN" ]; then
         printf '\033[1;36m # \033[0msed-substitute templates/%s -> %s\n' "$1" "$2"
         return 0
     fi
-    sed -e "s|@GAME_DIR@|$GAME_DIR|g" -e "s|@COMPAT@|$COMPAT|g" -e "s|@PFX@|$PFX|g" \
-        -e "s|@PROTON@|$PROTON|g"       -e "s|@STEAMVR@|$STEAMVR|g" \
-        -e "s|@STEAM_ROOT@|$STEAM_ROOT|g" -e "s|@S_ROOT@|$S_ROOT|g" -e "s|@S_TARGET@|$S_TARGET|g" -e "s|@APP_ID@|$APP_ID|g" \
-        -e "s|@HOME@|$HOME|g" \
-        -e "s|@VRCHAT_VRC_DIR@|$(vrchat_low)|g" \
+    # sed treats & and | specially; a Steam library path can contain either.
+    local _g _c _pfx _proton _steamvr _steam_root _s_root _s_target _home _vrchat
+    _g="$(sed_escape "$GAME_DIR")"
+    _c="$(sed_escape "$COMPAT")"
+    _pfx="$(sed_escape "$PFX")"
+    _proton="$(sed_escape "$PROTON")"
+    _steamvr="$(sed_escape "$STEAMVR")"
+    _steam_root="$(sed_escape "$STEAM_ROOT")"
+    _s_root="$(sed_escape "$S_ROOT")"
+    _s_target="$(sed_escape "$S_TARGET")"
+    _home="$(sed_escape "$HOME")"
+    _vrchat="$(sed_escape "$(vrchat_low)")"
+    sed -e "s|@GAME_DIR@|$_g|g" -e "s|@COMPAT@|$_c|g" -e "s|@PFX@|$_pfx|g" \
+        -e "s|@PROTON@|$_proton|g"       -e "s|@STEAMVR@|$_steamvr|g" \
+        -e "s|@STEAM_ROOT@|$_steam_root|g" -e "s|@S_ROOT@|$_s_root|g" -e "s|@S_TARGET@|$_s_target|g" -e "s|@APP_ID@|$APP_ID|g" \
+        -e "s|@HOME@|$_home|g" \
+        -e "s|@VRCHAT_VRC_DIR@|$_vrchat|g" \
         "$REPO/templates/$1" > "$2"
 }
 run mkdir -p "$HOME/.local/bin"

@@ -11,7 +11,16 @@ WIVRN_MANIFEST="/usr/share/openxr/1/openxr_wivrn.json"
 STEAMVR_DIR="$HOME/.local/share/Steam/steamapps/common/SteamVR"
 STEAMVR_MANIFEST="$STEAMVR_DIR/steamxr_linux64.json"
 OPENVR_PATHS="$HOME/.config/openvr/openvrpaths.vrpath"
-XRIZER_DIR="/opt/xrizer"
+# xrizer lives in different places per packaging: AUR/release use /opt/xrizer,
+# the Fedora @xr-sig COPR uses /usr/lib64/xrizer/runtime.
+find_xrizer() {
+  local d
+  for d in /opt/xrizer /usr/lib64/xrizer/runtime /usr/lib/xrizer/runtime; do
+    [ -f "$d/bin/linux64/vrclient.so" ] && { echo "$d"; return 0; }
+  done
+  return 1
+}
+XRIZER_DIR="$(find_xrizer || true)"
 STEAMVR_APPID="250820"
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -69,7 +78,7 @@ kill_ignition() {
   if command -v reap-ignition >/dev/null 2>&1; then
     reap-ignition --quiet --kill || true
   else
-    pkill -f "ignition_server" 2>/dev/null || true
+    pkill -x ignition_server 2>/dev/null || true
   fi
   sleep 1
 }
@@ -132,6 +141,7 @@ start_steamvr() {
 
 case "${1:-status}" in
   wivrn|w)
+    [ -n "$XRIZER_DIR" ] || die "xrizer runtime not found (looked in /opt/xrizer and /usr/lib64/xrizer/runtime); install xrizer (Fedora: dnf copr enable @xr-sig/xrizer && dnf install xrizer) or re-run ./install.sh"
     # Set the runtime first: if a cleanup step stalls, the critical state is
     # already correct instead of half-switched.
     link_runtime "$WIVRN_MANIFEST"
@@ -157,7 +167,11 @@ case "${1:-status}" in
     ;;
   status|st|"")
     echo "OpenXR runtime: $(current)"
-    echo "OpenVR runtime: $(current_openvr)"
+    ovr="$(current_openvr)"
+    if [ "$ovr" != "unset" ] && [ ! -f "$ovr/bin/linux64/vrclient.so" ]; then
+      ovr="$ovr (missing)"
+    fi
+    echo "OpenVR runtime: $ovr"
     printf "WiVRn service:  %s\n" "$(systemctl --user show -p ActiveState --value wivrn.service 2>/dev/null)"
     if pgrep -f "SteamVR/bin/linux64/vrmonitor" >/dev/null 2>&1; then
       echo "SteamVR:        running"

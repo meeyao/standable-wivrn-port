@@ -160,7 +160,7 @@ new file mode 100644
 index 00000000..bb9aba6e
 --- /dev/null
 +++ b/server/driver/wivrn_standable_body_tracker.cpp
-@@ -0,0 +1,170 @@
+@@ -0,0 +1,178 @@
 +#include "wivrn_standable_body_tracker.h"
 +
 +#include "util/u_device_id.h"
@@ -211,9 +211,10 @@ index 00000000..bb9aba6e
 +	}
 +
 +	out_value->base_body_joint_set_meta.sample_time_ns = desired_timestamp_ns;
-+	out_value->base_body_joint_set_meta.confidence = 1.f;
++	out_value->base_body_joint_set_meta.confidence = 0.f;
 +	out_value->base_body_joint_set_meta.skeleton_changed_count = 1;
-+	out_value->base_body_joint_set_meta.is_active = true;
++	out_value->base_body_joint_set_meta.is_active = false;
++	bool any_valid = false;
 +
 +	for (uint32_t i = 0; i < fb_count; ++i)
 +	{
@@ -230,10 +231,10 @@ index 00000000..bb9aba6e
 +		uint32_t fb_index;
 +		uint32_t meta_index;
 +	} joints[] = {
-+	        {self->hip, XRT_BODY_JOINT_HIPS_FB, 0},
-+	        {self->chest, XRT_BODY_JOINT_CHEST_FB, 0},
-+	        {self->elbow_left, XRT_BODY_JOINT_LEFT_ARM_LOWER_FB, 0},
-+	        {self->elbow_right, XRT_BODY_JOINT_RIGHT_ARM_LOWER_FB, 0},
++	        {self->hip, XRT_BODY_JOINT_HIPS_FB, XRT_FULL_BODY_JOINT_HIPS_META},
++	        {self->chest, XRT_BODY_JOINT_CHEST_FB, XRT_FULL_BODY_JOINT_CHEST_META},
++	        {self->elbow_left, XRT_BODY_JOINT_LEFT_ARM_LOWER_FB, XRT_FULL_BODY_JOINT_LEFT_ARM_LOWER_META},
++	        {self->elbow_right, XRT_BODY_JOINT_RIGHT_ARM_LOWER_FB, XRT_FULL_BODY_JOINT_RIGHT_ARM_LOWER_META},
 +	        {self->knee_left, 0, XRT_FULL_BODY_JOINT_LEFT_LOWER_LEG_META},
 +	        {self->knee_right, 0, XRT_FULL_BODY_JOINT_RIGHT_LOWER_LEG_META},
 +	        {self->foot_left, 0, XRT_FULL_BODY_JOINT_LEFT_FOOT_TRANSVERSE_META},
@@ -255,6 +256,7 @@ index 00000000..bb9aba6e
 +		{
 +			continue;
 +		}
++		any_valid = true;
 +		if (fb_joints != nullptr && j.fb_index != 0 && j.fb_index < fb_count)
 +		{
 +			fb_joints[j.fb_index].relation = relation;
@@ -265,11 +267,17 @@ index 00000000..bb9aba6e
 +		}
 +	}
 +
-+	out_value->body_pose = xrt_space_relation{
-+	        .relation_flags = (xrt_space_relation_flags)(XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_POSITION_VALID_BIT |
-+	                                                     XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT),
-+	        .pose = XRT_POSE_IDENTITY,
-+	};
++	out_value->base_body_joint_set_meta.confidence = any_valid ? 1.f : 0.f;
++	out_value->base_body_joint_set_meta.is_active = any_valid;
++	out_value->body_pose = xrt_space_relation{};
++	if (any_valid)
++	{
++		out_value->body_pose = xrt_space_relation{
++		        .relation_flags = (xrt_space_relation_flags)(XRT_SPACE_RELATION_ORIENTATION_VALID_BIT | XRT_SPACE_RELATION_POSITION_VALID_BIT |
++		                                                     XRT_SPACE_RELATION_ORIENTATION_TRACKED_BIT | XRT_SPACE_RELATION_POSITION_TRACKED_BIT),
++		        .pose = XRT_POSE_IDENTITY,
++		};
++	}
 +
 +	return XRT_SUCCESS;
 +}

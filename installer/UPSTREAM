@@ -1,6 +1,7 @@
 Vendored from https://github.com/meeyao/standable-linux-port
 Branch: testing/rc
-Commit: 90b0844 (plus the WiVRn GUI changes now carried locally)
+Commit: 90b0844 base (plus the WiVRn changes and bug fixes below).
+The SteamVR repo has since moved to a377535 (driver-log rotation); not synced.
 
 This directory is a self-contained copy so the WiVRn port does not clone or
 depend on the SteamVR port at install time. WiVRn-specific edits live here:
@@ -11,5 +12,12 @@ depend on the SteamVR port at install time. WiVRn-specific edits live here:
     - STANDABLE_GUI=1: spawn Standable.exe into the driver wineserver,
       cwd at the game root, Steam identity env
 
+Bug fixes carried here (also worth backporting to the SteamVR port):
+    - gen(): escape & and | in Steam paths before sed
+    - standable_launch_hook.sh.in: cd to the game root before Standable.exe
+    - install.sh --uninstall: restore originals from .bak instead of deleting
+      them; only remove our VRChat LocalLow symlink
+    - same-file guard for steam_api64.dll in bin/win64
+
 When pulling fixes from the SteamVR port, diff against that repo and keep
-these three changes.
+these changes.

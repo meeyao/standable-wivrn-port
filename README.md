@@ -21,6 +21,8 @@ Run the real Standable Full Body Estimation SteamVR driver on Linux with WiVRn, 
 - Around 8 GB of free disk space
 - Arch/CachyOS or Fedora. Ubuntu 25.10+ also has the required packages but is untested. Ubuntu 24.04 and Debian 13 cannot build this: their Vulkan headers are older than 1.4.304 and/or they have no OpenVR package. The installer prints the dependency command for your distro.
 - `libopenvr_api.so` (the `openvr` package on Arch, `openvr-devel` on Fedora, `libopenvr-dev` on Ubuntu 25.10+, in `universe`). WiVRn links it, so the build and the runtime both need it. The installer checks for it.
+- xrizer, the OpenVR -> OpenXR runtime VRChat uses. The installer installs it when missing: Fedora uses the `@xr-sig/xrizer` COPR, otherwise the pinned upstream release.
+- WayVR (optional, recommended), used to center the playspace and set the floor height. Install it yourself (AUR, AppImage, or your distro); the installer only warns if it is missing. Without it, Standable falls back to 105 cm.
 
 ## Install
 
@@ -34,26 +36,34 @@ The installer:
 
 1. Sets up the Standable and Proton side (Steam root, Proton prefix, Windows-path shims, the Ignition shim, and the driver hook).
 2. Builds upstream WiVRn at the tag in `wivrn-rev`, applying the patch series in `patches/`, and installs it (server, runtime libraries, and systemd unit).
-3. Writes the systemd user drop-in that enables the `steamvr_lh` driver host.
+3. Installs xrizer if no runtime is found (Fedora: `@xr-sig/xrizer` COPR; fallback: pinned release in `/opt/xrizer`).
+4. Installs the reaper binary and writes the systemd user drop-in that enables the `steamvr_lh` driver host.
+5. Warns if WayVR is missing (optional floor-height helper).
+
+The default install is **core-only**. Optional components are off by default and selected with a short checklist (or ignored with `--yes`):
+
+- standalone Standable GUI launcher (the driver helper already starts the GUI)
+- background orphan timer (start/stop cleanup is always installed)
 
 The build takes a few minutes.
 
 Options:
 
+- `--yes`: use the default (core) components without the checklist
 - `--install-deps`: install the WiVRn build dependencies for Arch/Fedora/Debian (uses `sudo`)
-- `--skip-port-installer`: skip the Standable and Proton setup (already configured)
+- `--skip-port-installer`, `--skip-wivrn`, `--skip-xrizer`, `--skip-gui`, `--skip-reaper`: skip one component
 - `--help`: show installer options
 
 Environment: `WIVRN_REPO`, `WIVRN_REF`.
 
-The Standable/Proton installer is vendored in `port/`, so this repo installs
-without cloning the SteamVR port. `port/UPSTREAM` records what it came from and
+The Standable/Proton installer is vendored in `installer/`, so this repo installs
+without cloning the SteamVR port. `installer/UPSTREAM` records what it came from and
 the local WiVRn changes.
 
 ## Build from source
 
 `./install.sh` is the supported path. It installs the Standable/Proton side
-from `port/`, builds WiVRn at the tag in `wivrn-rev` with the patches in
+from `installer/`, builds WiVRn at the tag in `wivrn-rev` with the patches in
 `patches/`, installs it under `/usr`, and writes the drop-in. Pass
 `--install-deps` to install the distro packages with `sudo`; without it the
 installer checks them first, before touching the Standable/Proton side, and
@@ -77,8 +87,8 @@ Notes:
 - Builds verified on Arch/CachyOS and Fedora 44 (full installer on the host),
   plus Fedora 42 in a container. Ubuntu 25.10 package names were checked but
   not built.
-- `x264` is optional. If it is missing (Fedora without RPM Fusion), the build
-  uses the hardware encoders and the installer adds `-DWIVRN_USE_X264=OFF`.
+- `x264` is required: it is the encoder WiVRn falls back to. On Fedora it is
+  in RPM Fusion; `--install-deps` enables that repository and installs it.
 - The Monado patches must be in `patches/monado/` before configure; WiVRn's
   FetchContent step applies them when it checks out Monado.
 - `libopenvr_api.so` must be present at configure time. Without it Monado
@@ -109,7 +119,7 @@ Switch to WiVRn:
 vrswitch wivrn
 ```
 
-Reconnect your headset, then add this to **Steam → VRChat → Properties → General → Launch Options**:
+Start WayVR (`wayvr --show`) if installed and use it to center the playspace and set the floor height. Reconnect your headset, then add this to **Steam → VRChat → Properties → General → Launch Options**:
 
 ```sh
 IPC_IGNORE_VERSION=1 PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_SERIALS="Hips;Chest;Elbow Left;Elbow Right;Knee Left;Knee Right;Foot Left;Foot Right" %command%
@@ -135,8 +145,9 @@ Work through this in order; each step isolates one layer.
 
    Expect `WIVRN_USE_STEAMVR_LH=1`, `LH_LOAD_STANDABLE=1`, `STANDABLE_GUI=1`.
 
-2. The runtime is switched: `vrswitch status` shows WiVRn for OpenXR and
-   `/opt/xrizer` for OpenVR.
+2. The runtime is switched: `vrswitch status` shows WiVRn for OpenXR and the
+   xrizer runtime for OpenVR (`/usr/lib64/xrizer/runtime` on Fedora,
+   `/opt/xrizer` on Arch).
 
 3. Start WiVRn and connect the headset, then check the driver log:
 
@@ -165,7 +176,7 @@ Work through this in order; each step isolates one layer.
 The vendored installer also has a doctor for the Standable/Proton side:
 
 ```sh
-./port/install.sh --check
+./installer/install.sh --check
 ```
 
 It appends a system dump to `~/.local/state/standable/install.log`, which is
@@ -182,7 +193,7 @@ The settings window starts with the driver and joins its wineserver, so **change
 **Start order:**
 
 1. WiVRn (connect the headset)
-2. WayVR
+2. WayVR (if installed)
 3. VRChat — the Standable driver comes up with the session, and the GUI starts with it
 
 The driver helper launches the GUI with the same `$PROTON run` context and wineserver as the driver, with its working directory at the game root (Unity needs that to find `Standable_Data`; otherwise it renders a missing-texture checkerboard). Steam's identity environment is supplied too. Named pipes do not cross wineservers, so a separately launched GUI cannot control the driver — do not start a second copy.
@@ -229,6 +240,13 @@ An orphaned `ignition_server` process is holding the shared-memory bridge. Run `
 
 The `PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1` launch option is missing. Add the launch options from Run above.
 
+**`vrswitch status` says OpenVR runtime: ... (missing)**
+
+xrizer is not installed. Re-run `./install.sh`, or on Fedora:
+`sudo dnf copr enable @xr-sig/xrizer && sudo dnf install xrizer`. Native WiVRn
+uses `/usr/lib64/xrizer/runtime`; the Flatpak dashboard's Custom path is
+`/run/host/usr/lib64/xrizer/runtime`.
+
 **`vrswitch status` says OpenXR runtime: unknown**
 
 WiVRn removes the active-runtime symlink when it starts. If you restarted the
@@ -252,10 +270,10 @@ exist, `LH_LOAD_STANDABLE=1` never reached the driver.
 **Fedora: configure fails on x264, nlohmann_json, avahi, or OpenSSL**
 
 `x264-devel` is in RPM Fusion, `nlohmann_json` is Fedora's `json-devel`,
-`avahi-glib.pc` is in `avahi-glib-devel` (not `avahi-devel`), and the server
-needs `openssl-devel`. Run `./install.sh --install-deps`, or use the dependency
-command the installer prints (see Requirements). Without RPM Fusion the build
-continues with the hardware encoders.
+`avahi-glib.pc` is in `avahi-glib-devel` (not `avahi-devel`), the server needs
+`openssl-devel`, and `x264-devel` is required (without an encoder WiVRn cannot
+start a session). Run `./install.sh --install-deps`, which enables RPM Fusion
+free for x264, or use the dependency command the installer prints.
 
 **Trackers do not appear in VRChat**
 
@@ -288,6 +306,13 @@ The 8 proxies reach VRChat through xrizer, which maps OpenVR tracker roles to Op
 4. Restart cleanly. Set the options, fully quit VRChat, then launch it from Steam.
 
 5. If they still do not appear, check VRChat's `output_log.txt` (in the game's `_data` directory) for tracker or xrizer lines. If the proxies exist in the WiVRn log but never move, the estimator is not running; see the frozen IK entry above.
+
+**Calibration is off, or the floor height is wrong**
+
+Start WayVR before VRChat and set the floor height there. Standable uses the
+playspace floor; without WayVR the driver falls back to 105 cm. Install WayVR
+from your package manager, the AUR, or the official AppImage; the installer
+only warns if it is missing.
 
 **Elbows are off, or the legs and spine look inverted**
 
@@ -348,7 +373,7 @@ The Standable driver itself is proprietary and is not included here. The port in
 | Path | Purpose |
 | --- | --- |
 | `install.sh`, `uninstall.sh` | install and remove the WiVRn side |
-| `port/` | vendored Standable/Proton installer (`port/UPSTREAM` has its origin) |
+| `installer/` | vendored Standable/Proton installer (`installer/UPSTREAM` has its origin) |
 | `patches/wivrn/`, `patches/monado/` | the patch series applied to upstream WiVRn and Monado |
 | `wivrn-rev` | pinned upstream WiVRn tag |
 | `vendor/` | Ignition shim binaries loaded by `steamvr_lh` |
