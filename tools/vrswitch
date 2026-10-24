@@ -6,6 +6,8 @@
 #   vrswitch status    show which runtime is active (default)
 set -euo pipefail
 
+trap 'rc=$?; echo "vrswitch: failed (exit $rc) at line $LINENO: $BASH_COMMAND" >&2' ERR
+
 RUNTIME_LINK="$HOME/.config/openxr/1/active_runtime.json"
 WIVRN_MANIFEST="/usr/share/openxr/1/openxr_wivrn.json"
 STEAMVR_DIR="$HOME/.local/share/Steam/steamapps/common/SteamVR"
@@ -24,6 +26,7 @@ XRIZER_DIR="$(find_xrizer || true)"
 STEAMVR_APPID="250820"
 
 die() { echo "error: $*" >&2; exit 1; }
+warn() { echo "warning: $*" >&2; }
 
 # Point the OpenXR active runtime at a manifest. The loader dir does not exist
 # on a fresh machine, and `ln` under `set -e` would abort the whole switch.
@@ -65,73 +68,49 @@ json.dump(cfg,open(p,"w"),indent=1)
 PY
 }
 
+# A SteamVR crash can leave the Steam Linux Runtime wrappers alive. Steam then
+# still thinks AppId 250820 is running and refuses a new launch, even though
+# vrserver/vrmonitor are gone. Match by comm first, so a grep/editor/shell that
+# merely mentions the AppId is never killed.
+_stop_match() {
+  local pid="$1" comm cmd
+  comm="$(cat "/proc/$pid/comm" 2>/dev/null)" || return 1
+  case "$comm" in
+    steam-runtime-*|vrmonitor*|vrserver*|vrstartup*|reaper|steam-launch-*) ;;
+    *) return 1 ;;
+  esac
+  cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null)" || return 1
+  case "$cmd" in
+    *"AppId=$STEAMVR_APPID"*|*"SteamVR/bin/"*) return 0 ;;
+  esac
+  return 1
+}
+
 stop_steamvr() {
-  pkill -f "SteamVR/bin/linux64/vrmonitor" 2>/dev/null || true
-  pkill -f "SteamVR/bin/linux64/vrserver"  2>/dev/null || true
+  _ancestor_of_self() {
+    local x="$1" cur="$$"
+    while [ -n "$cur" ] && [ "$cur" -gt 1 ]; do
+      [ "$x" = "$cur" ] && return 0
+      cur="$(ps -o ppid= -p "$cur" 2>/dev/null | tr -d ' ')"
+    done
+    return 1
+  }
+  local p pid
+  for p in /proc/[0-9]*; do
+    pid="${p#/proc/}"
+    [ "$pid" = "$$" ] && continue
+    _ancestor_of_self "$pid" && continue
+    _stop_match "$pid" || continue
+    kill "$pid" 2>/dev/null || true
+  done
   sleep 1
-}
-
-# Standable's ignition_server.exe survives its host runtime shutting down and
-# then holds the bridge, so the other runtime's shim fails with "error 305".
-# The repo's reap-ignition does this without touching a live session.
-kill_ignition() {
-  if command -v reap-ignition >/dev/null 2>&1; then
-    reap-ignition --quiet --kill || true
-  else
-    pkill -x ignition_server 2>/dev/null || true
-  fi
-  sleep 1
-}
-
-# The Standable launcher and Proton rewrite openvrpaths.vrpath and can drop the
-# host reaction_drivers list, which makes SteamVR silently skip the drivers.
-# Re-add the ones that are installed before every SteamVR switch.
-ensure_external_drivers() {
-  [ -f "$OPENVR_PATHS" ] || return 0
-  local common="$HOME/.local/share/Steam/steamapps/common"
-  local d
-  for d in SlimeVR "Standable Full Body Estimation"; do
-    [ -f "$common/$d/driver.vrdrivermanifest" ] && printf '%s\n' "$common/$d"
-  done | python3 - "$OPENVR_PATHS" <<'PY'
-import json, sys
-p = sys.argv[1]
-want = [l.strip() for l in sys.stdin if l.strip()]
-d = json.load(open(p))
-cur = [x for x in (d.get("external_drivers") or []) if not x.startswith("S:\\\\")]
-merged = want + [x for x in cur if x not in want]
-if merged != (d.get("external_drivers") or []):
-    d["external_drivers"] = merged
-    json.dump(d, open(p, "w"), indent=2)
-    print("external_drivers restored:", merged)
-PY
-}
-
-# SteamVR latches safe mode in two places outside our repos: the crash-timestamp
-# file (any unclean vrserver exit rewrites it) and blocked_by_safe_mode flags
-# per driver. The settings UI clears neither, so without this every crash stuck
-# around forever and each manual clear was undone by the next crash.
-clear_safe_mode_latch() {
-  if pgrep -f "SteamVR/bin/linux64/vrserver" >/dev/null 2>&1; then
-    echo "warning: vrserver running, skipping safe-mode clear (would be overwritten)" >&2
-    return 0
-  fi
-  rm -f "$HOME/.local/share/Steam/config/vrserver_crash_timestamp.txt"
-  python3 - <<'PY'
-import json, os
-p = os.path.expanduser("~/.local/share/Steam/config/steamvr.vrsettings")
-try:
-    d = json.load(open(p))
-except Exception as e:
-    print(f"warning: cannot read vrsettings: {e}")
-    raise SystemExit
-cleared = [k for k, v in d.items()
-           if isinstance(v, dict) and v.pop("blocked_by_safe_mode", None) is not None]
-if cleared:
-    json.dump(d, open(p, "w"), indent=1)
-    print("safe-mode latch cleared:", ", ".join(cleared))
-else:
-    print("safe-mode latch: already clear")
-PY
+  for p in /proc/[0-9]*; do
+    pid="${p#/proc/}"
+    [ "$pid" = "$$" ] && continue
+    _ancestor_of_self "$pid" && continue
+    _stop_match "$pid" || continue
+    kill -9 "$pid" 2>/dev/null || true
+  done
 }
 
 start_steamvr() {
@@ -145,7 +124,7 @@ case "${1:-status}" in
     # Set the runtime first: if a cleanup step stalls, the critical state is
     # already correct instead of half-switched.
     link_runtime "$WIVRN_MANIFEST"
-    set_openvr_runtime "$XRIZER_DIR"
+    set_openvr_runtime "$XRIZER_DIR" || warn "could not write the OpenVR runtime path"
     systemctl --user reset-failed wivrn.service 2>/dev/null || true
     stop_steamvr
     kill_ignition
@@ -154,14 +133,18 @@ case "${1:-status}" in
     ;;
   steamvr|s|steam)
     # Runtime + drivers first (critical), cleanup last (best-effort).
-    ensure_external_drivers
+    ensure_external_drivers || warn "could not restore external_drivers"
     link_runtime "$STEAMVR_MANIFEST"
-    set_openvr_runtime "$STEAMVR_DIR"
+    set_openvr_runtime "$STEAMVR_DIR" || warn "could not write the OpenVR runtime path"
     systemctl --user stop wivrn.service 2>/dev/null || true
     pkill -x wivrn-server 2>/dev/null || true
     systemctl --user reset-failed wivrn.service 2>/dev/null || true
     kill_ignition
-    clear_safe_mode_latch
+    clear_safe_mode_latch || warn "could not clear the safe-mode latch"
+    # A stuck wrapper makes Steam think SteamVR is already running.
+    if ! pgrep -x vrserver >/dev/null 2>&1 && ! pgrep -x vrmonitor >/dev/null 2>&1; then
+      stop_steamvr
+    fi
     start_steamvr
     echo "OpenXR -> SteamVR, OpenVR -> SteamVR (launching)"
     ;;
