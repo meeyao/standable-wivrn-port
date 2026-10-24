@@ -40,6 +40,7 @@ The build takes a few minutes.
 
 Options:
 
+- `--install-deps`: install the WiVRn build dependencies for Arch/Fedora/Debian (uses `sudo`)
 - `--skip-port-installer`: skip the Standable and Proton setup (already configured)
 - `--help`: show installer options
 
@@ -53,9 +54,10 @@ the local WiVRn changes.
 
 `./install.sh` is the supported path. It installs the Standable/Proton side
 from `port/`, builds WiVRn at the tag in `wivrn-rev` with the patches in
-`patches/`, installs it under `/usr`, and writes the drop-in. It does **not**
-install distro packages: install the dependencies first (the installer prints
-the right command for your distro when a tool is missing).
+`patches/`, installs it under `/usr`, and writes the drop-in. Pass
+`--install-deps` to install the distro packages with `sudo`; without it the
+installer checks them first, before touching the Standable/Proton side, and
+prints the command for your distro.
 
 The build it runs is equivalent to:
 
@@ -72,9 +74,11 @@ sudo cmake --install build
 
 Notes:
 
-- Builds verified on Arch/CachyOS (host) and Fedora 42 (container, configure and
-  full build against the pinned tag). Ubuntu 25.10 package names were checked
-  but not built.
+- Builds verified on Arch/CachyOS and Fedora 44 (full installer on the host),
+  plus Fedora 42 in a container. Ubuntu 25.10 package names were checked but
+  not built.
+- `x264` is optional. If it is missing (Fedora without RPM Fusion), the build
+  uses the hardware encoders and the installer adds `-DWIVRN_USE_X264=OFF`.
 - The Monado patches must be in `patches/monado/` before configure; WiVRn's
   FetchContent step applies them when it checks out Monado.
 - `libopenvr_api.so` must be present at configure time. Without it Monado
@@ -243,8 +247,9 @@ exist, `LH_LOAD_STANDABLE=1` never reached the driver.
 
 `x264-devel` is in RPM Fusion, `nlohmann_json` is Fedora's `json-devel`,
 `avahi-glib.pc` is in `avahi-glib-devel` (not `avahi-devel`), and the server
-needs `openssl-devel`. Use the dependency command the installer prints (see
-Requirements).
+needs `openssl-devel`. Run `./install.sh --install-deps`, or use the dependency
+command the installer prints (see Requirements). Without RPM Fusion the build
+continues with the hardware encoders.
 
 **Trackers do not appear in VRChat**
 

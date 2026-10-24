@@ -1484,7 +1484,8 @@ bak "$GAME_DIR/bin/linux64/steam_api64.dll"
 resolve_steam_api64
 run cp "$SA64_SRC" "$GAME_DIR/bin/linux64/"
 bak "$GAME_DIR/bin/win64/steam_api64.dll"
-run cp "$SA64_SRC" "$GAME_DIR/bin/win64/"
+# The game's own DLL is already in place; cp would fail "same file".
+[ "$SA64_SRC" = "$GAME_DIR/bin/win64/steam_api64.dll" ] || run cp "$SA64_SRC" "$GAME_DIR/bin/win64/"
 say "copied steam_api64.dll from $(basename "$(dirname "$SA64_SRC")")"
 
 # glibc compat check: warn early if the .so won't load on this system

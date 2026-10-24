@@ -29,6 +29,8 @@ REAPER_SRC="$REPO_DIR/tools/reap-ignition.sh"
 REAPER_BIN="/usr/local/bin/reap-ignition"
 
 SKIP_PORT_INSTALLER=0
+INSTALL_DEPS=0
+WIVRN_CMAKE_X264=()
 
 # --- output helpers ---------------------------------------------------------
 usage() {
@@ -36,6 +38,7 @@ usage() {
 Usage: install.sh [options]
 
   --skip-port-installer   do not run the vendored Standable/Proton installer
+  --install-deps          install the WiVRn build dependencies for this distro
   -h, --help              show this help
 
 Environment:
@@ -61,49 +64,50 @@ detect_distro() {
     esac
 }
 
+# --- build dependencies -----------------------------------------------------
+DEPS_ARCH=(
+    base-devel cmake ninja git python
+    vulkan-headers vulkan-icd-loader glslang shaderc spirv-tools libglvnd
+    ffmpeg x264 pipewire eigen glib2 glib2-devel systemd-libs
+    nlohmann-json cli11 boost avahi libnotify librsvg libarchive libpng openssl openxr
+    libbsd libdrm libxrandr libxcb libx11 wayland wayland-protocols openvr
+)
+DEPS_FEDORA=(
+    gcc-c++ make cmake ninja-build git python3
+    vulkan-loader-devel vulkan-headers glslang glslc spirv-tools libglvnd-devel
+    libavcodec-free-devel libavutil-free-devel libdrm-devel
+    pipewire-devel eigen3-devel glib2-devel json-devel cli11-devel boost-devel
+    avahi-devel avahi-glib-devel libnotify-devel librsvg2-devel libarchive-devel
+    libpng-devel systemd-devel libXrandr-devel libxcb-devel libX11-devel
+    wayland-devel wayland-protocols-devel openxr-devel openvr-devel libbsd-devel
+    openssl-devel
+)
+DEPS_FEDORA_EXTRA=(x264-devel)   # RPM Fusion
+DEPS_DEBIAN=(
+    build-essential cmake ninja-build git python3
+    libvulkan-dev glslang-tools spirv-tools libgl-dev
+    libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libx264-dev
+    libpipewire-0.3-dev libeigen3-dev libglib2.0-dev libglib2.0-dev-bin
+    nlohmann-json3-dev libcli11-dev libboost-all-dev
+    libavahi-client-dev libavahi-glib-dev libwayland-dev
+    libssl-dev libnotify-dev librsvg2-dev libarchive-dev libpng-dev libsystemd-dev
+    libbsd-dev libdrm-dev libxrandr-dev libxcb1-dev libx11-dev libopenxr-dev libopenvr-dev
+)
+
 print_build_deps() {
     case "$(detect_distro)" in
         arch)
-            cat <<'EOF'
-WiVRn build deps (Arch/CachyOS):
-  sudo pacman -S --needed base-devel cmake ninja git python \
-    vulkan-headers vulkan-icd-loader glslang shaderc spirv-tools libglvnd \
-    ffmpeg x264 pipewire eigen glib2 glib2-devel systemd-libs \
-    nlohmann-json cli11 boost avahi libnotify librsvg libarchive libpng openssl openxr \
-    libbsd libdrm libxrandr libxcb libx11 wayland wayland-protocols openvr
-EOF
+            printf 'WiVRn build deps (Arch/CachyOS):\n  sudo pacman -S --needed %s\n' "${DEPS_ARCH[*]}"
             ;;
         debian)
-            cat <<'EOF'
-WiVRn build deps (Debian/Ubuntu):
-  sudo apt install build-essential cmake ninja-build git python3 \
-    libvulkan-dev glslang-tools spirv-tools libgl-dev \
-    libavcodec-dev libavformat-dev libavutil-dev libswscale-dev libx264-dev \
-    libpipewire-0.3-dev libeigen3-dev libglib2.0-dev libglib2.0-dev-bin \
-    nlohmann-json3-dev libcli11-dev libboost-all-dev \
-    libavahi-client-dev libavahi-glib-dev libwayland-dev \
-    libssl-dev libnotify-dev librsvg2-dev libarchive-dev libpng-dev libsystemd-dev \
-    libbsd-dev libdrm-dev libxrandr-dev libxcb1-dev libx11-dev libopenxr-dev libopenvr-dev
-
-  WiVRn needs Vulkan headers >= 1.4.304 and an OpenVR package.
-  Ubuntu 25.10+ has both. Ubuntu 24.04 ships Vulkan 1.3, and Debian 13 has no
-  OpenVR package; those need newer Vulkan headers / OpenVR built by hand.
-EOF
+            printf 'WiVRn build deps (Debian/Ubuntu):\n  sudo apt install %s\n' "${DEPS_DEBIAN[*]}"
+            printf '\n  WiVRn needs Vulkan headers >= 1.4.304 and an OpenVR package.\n'
+            printf '  Ubuntu 25.10+ has both. Ubuntu 24.04 ships Vulkan 1.3, and Debian 13\n'
+            printf '  has no OpenVR package; those need newer Vulkan headers / OpenVR built by hand.\n'
             ;;
         fedora)
-            cat <<'EOF'
-WiVRn build deps (Fedora):
-  sudo dnf install gcc-c++ make cmake ninja-build git \
-    vulkan-loader-devel vulkan-headers glslang glslc spirv-tools libglvnd-devel \
-    libavcodec-free-devel libavutil-free-devel libdrm-devel \
-    pipewire-devel eigen3-devel glib2-devel json-devel cli11-devel boost-devel \
-    avahi-devel avahi-glib-devel libnotify-devel librsvg2-devel libarchive-devel libpng-devel \
-    systemd-devel libXrandr-devel libxcb-devel libX11-devel wayland-devel \
-    wayland-protocols-devel openxr-devel openvr-devel libbsd-devel python3 openssl-devel
-
-x264-devel comes from RPM Fusion:
-  sudo dnf install x264-devel
-EOF
+            printf 'WiVRn build deps (Fedora):\n  sudo dnf install %s\n' "${DEPS_FEDORA[*]}"
+            printf '\nx264-devel comes from RPM Fusion:\n  sudo dnf install %s\n' "${DEPS_FEDORA_EXTRA[*]}"
             ;;
         *)
             cat <<'EOF'
@@ -114,6 +118,56 @@ X11/XCB/Xrandr, Wayland, and the OpenVR API library (libopenvr_api.so).
 EOF
             ;;
     esac
+}
+
+install_build_deps() {
+    case "$(detect_distro)" in
+        arch)   run_root pacman -S --needed --noconfirm "${DEPS_ARCH[@]}" ;;
+        debian) run_root apt install -y "${DEPS_DEBIAN[@]}" ;;
+        fedora)
+            run_root dnf install -y "${DEPS_FEDORA[@]}"
+            if ! pkg-config --exists x264 2>/dev/null; then
+                run_root dnf install -y "${DEPS_FEDORA_EXTRA[@]}" \
+                    || warn "x264-devel not installed (enable RPM Fusion); continuing without the x264 encoder"
+            fi
+            ;;
+        *) print_build_deps; die "unknown distro; install the deps above" ;;
+    esac
+}
+
+# Fail before the Standable/Proton setup if the WiVRn build cannot work.
+check_build_deps() {
+    local missing=() t m f
+    for t in cmake ninja git pkg-config gdbus-codegen glslangValidator spirv-opt python3; do
+        command -v "$t" >/dev/null 2>&1 || missing+=("$t")
+    done
+    for m in libavcodec libavutil libdrm libpipewire-0.3 avahi-client avahi-glib \
+             glib-2.0 gio-2.0 libnotify librsvg-2.0 libarchive libpng openssl libsystemd; do
+        pkg-config --exists "$m" 2>/dev/null || missing+=("pkgconfig($m)")
+    done
+    # x264 is optional: hardware encoders (VAAPI/NVENC/Vulkan) still work.
+    if ! pkg-config --exists x264 2>/dev/null; then
+        warn "x264 not found (Fedora: x264-devel is in RPM Fusion); building without the x264 encoder"
+        WIVRN_CMAKE_X264=(-DWIVRN_USE_X264=OFF)
+    fi
+    for f in /usr/include/boost/version.hpp /usr/include/eigen3/Eigen/Core \
+             /usr/include/nlohmann/json.hpp /usr/include/CLI/CLI.hpp; do
+        [ -e "$f" ] || missing+=("$f")
+    done
+    local oxr=0 oxr_dir
+    for oxr_dir in /usr/lib/cmake/openxr /usr/lib/cmake/OpenXR \
+                   /usr/lib64/cmake/openxr /usr/lib64/cmake/OpenXR \
+                   /usr/share/cmake/openxr /usr/share/cmake/OpenXR \
+                   /usr/lib/*/cmake/openxr /usr/lib/*/cmake/OpenXR \
+                   /usr/include/openxr; do
+        [ -e "$oxr_dir" ] && { oxr=1; break; }
+    done
+    [ "$oxr" -eq 1 ] || missing+=("openxr headers")
+    if [ "${#missing[@]}" -gt 0 ]; then
+        print_build_deps
+        die "missing build deps: ${missing[*]} (re-run with --install-deps to install them)"
+    fi
+    check_wivrn_runtime_deps
 }
 
 # --- vendored Ignition bytes ------------------------------------------------
@@ -172,11 +226,6 @@ install_source() {
         warn "wivrn package installed: this build overwrites it, and dnf upgrade will undo it. Re-run ./install.sh after updates, or exclude wivrn."
     fi
     require git
-    if ! command -v cmake >/dev/null 2>&1 || ! command -v ninja >/dev/null 2>&1; then
-        print_build_deps
-        die "cmake/ninja missing"
-    fi
-    check_wivrn_runtime_deps
     local src="$CACHE_DIR/wivrn"
     if [ -d "$src/.git" ]; then
         git -C "$src" fetch --depth 1 origin "$WIVRN_REF"
@@ -201,11 +250,16 @@ install_source() {
     cp -f "$REPO_DIR"/patches/monado/*.patch "$src/patches/monado/"
     cmake -S "$src" -B "$src/build" -G Ninja \
         -DCMAKE_BUILD_TYPE=Release \
-        -DCMAKE_INSTALL_PREFIX=/usr
+        -DCMAKE_INSTALL_PREFIX=/usr \
+        ${WIVRN_CMAKE_X264[@]+"${WIVRN_CMAKE_X264[@]}"}
     cmake --build "$src/build"
     # WiVRn's install rules place the server, libs, unit file and manifest in the
-    # expected layout (/usr/bin, /usr/lib/wivrn, /usr/lib/systemd/user, /usr/share/openxr/1).
+    # expected layout (/usr/bin, /usr/lib[64]/wivrn, /usr/lib/systemd/user,
+    # /usr/share/openxr/1). Fedora/RHEL use lib64, so follow whatever was installed.
     run_root cmake --install "$src/build"
+    if [ -e /usr/lib64/wivrn/libopenxr_wivrn.so ]; then
+        WIVRN_LIBDIR="/usr/lib64/wivrn"
+    fi
     # Ensure the runtime manifest points at the installed Monado lib.
     write_openxr_json
 }
@@ -465,6 +519,7 @@ EOF
 while [ $# -gt 0 ]; do
     case "$1" in
         --skip-port-installer) SKIP_PORT_INSTALLER=1 ;;
+        --install-deps) INSTALL_DEPS=1 ;;
         -h|--help) usage; exit 0 ;;
         *) die "unknown argument: $1 (try --help)" ;;
     esac
@@ -475,6 +530,14 @@ say "repo: $REPO_DIR"
 mkdir -p "$CACHE_DIR"
 
 verify_vendor
+
+# Check (or install) the build deps before touching the Standable/Proton side:
+# a failed build used to leave users with a half-configured prefix.
+if [ "$INSTALL_DEPS" -eq 1 ]; then
+    say "installing WiVRn build deps"
+    install_build_deps
+fi
+check_build_deps
 
 if [ "$SKIP_PORT_INSTALLER" -eq 0 ]; then
     run_port_installer

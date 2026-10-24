@@ -11,7 +11,6 @@ REPO_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$INVOKING_HOME/.config}"
 PORT_INSTALLER_DIR="$REPO_DIR/port"
 
-WIVRN_LIBDIR="/usr/lib/wivrn"
 WIVRN_BINDIR="/usr/bin"
 OPENXR_DIR="/usr/share/openxr/1"
 UNIT="/usr/lib/systemd/user/wivrn.service"
@@ -68,7 +67,7 @@ fi
 
 say "removing WiVRn files"
 run_root rm -f "$WIVRN_BINDIR/wivrn-server"
-run_root rm -rf "$WIVRN_LIBDIR"
+run_root rm -rf /usr/lib/wivrn /usr/lib64/wivrn
 run_root rm -f "$OPENXR_DIR/openxr_wivrn.json"
 run_root rm -f "$UNIT"
 run_root rm -f "$REAPER_BIN"
