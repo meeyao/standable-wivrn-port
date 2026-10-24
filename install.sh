@@ -543,7 +543,9 @@ VRChat launch options (Steam -> Properties -> General), exact:
 
 Next steps:
   1. vrswitch wivrn
-  2. Reconnect the headset, launch VRChat with the options above.
+  2. Connect the headset. Start WayVR (if installed) and VRChat.
+  3. Center the playspace/floor in WayVR, run Standable's T-pose
+     calibration, then calibrate the avatar in VRChat.
 
 Logs: journalctl --user -u wivrn | grep "steamvr_lh driver"
 Status: vrswitch status

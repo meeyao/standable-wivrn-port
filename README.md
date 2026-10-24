@@ -113,23 +113,23 @@ replace those.
 
 ## Run
 
-Switch to WiVRn:
+1. Switch to WiVRn if SteamVR was active:
 
-```sh
-vrswitch wivrn
-```
+   ```sh
+   vrswitch wivrn
+   ```
 
-Start WayVR (`wayvr --show`) if installed and use it to center the playspace and set the floor height. Reconnect your headset, then add this to **Steam → VRChat → Properties → General → Launch Options**:
+2. Connect the headset to the WiVRn server.
+3. Start WayVR (`wayvr --show`) if installed.
+4. Start VRChat from Steam. Set these once in **VRChat → Properties → General → Launch Options**:
 
-```sh
-IPC_IGNORE_VERSION=1 PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_SERIALS="Hips;Chest;Elbow Left;Elbow Right;Knee Left;Knee Right;Foot Left;Foot Right" %command%
-```
+   ```sh
+   IPC_IGNORE_VERSION=1 PRESSURE_VESSEL_IMPORT_OPENXR_1_RUNTIMES=1 XRIZER_TRACKER_SERIALS="Hips;Chest;Elbow Left;Elbow Right;Knee Left;Knee Right;Foot Left;Foot Right" %command%
+   ```
 
-Calibrate in this order:
-
-1. Run Standable's in-driver T-pose calibration.
-2. Calibrate your avatar in VRChat.
-3. If your proportions look wrong, set VRChat's Avatar Measurement to **Height**, then recalibrate both.
+5. In WayVR, center the playspace and set the floor height.
+6. Run Standable's in-driver T-pose calibration.
+7. Calibrate your avatar in VRChat. If your proportions look wrong, set VRChat's Avatar Measurement to **Height**, then recalibrate both.
 
 SteamVR and WiVRn cannot own the headset at the same time. Use `vrswitch` to switch between them.
 
@@ -156,7 +156,7 @@ Work through this in order; each step isolates one layer.
    ```
 
    `Auth: 1` and `[DeviceManager] Total: 3` (headset plus both controllers).
-   `Auth: 17777` means the AppID file is missing.
+   `Auth: 17777` means the AppID file is missing or Steam is not logged in.
 
 4. The 8 proxies exist:
 
