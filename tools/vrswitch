@@ -124,6 +124,56 @@ kill_ignition() {
   sleep 1
 }
 
+# Restore the Standable external driver entry, but never the old
+# S:\ seed that pointed at a Windows path.
+ensure_external_drivers() {
+  [ -f "$OPENVR_PATHS" ] || return 0
+  local common="$HOME/.local/share/Steam/steamapps/common"
+  local d
+  for d in "Standable Full Body Estimation"; do
+    [ -f "$common/$d/driver.vrdrivermanifest" ] && printf '%s\n' "$common/$d"
+  done | python3 - "$OPENVR_PATHS" <<'PY'
+import json, sys
+p = sys.argv[1]
+want = [l.strip() for l in sys.stdin if l.strip()]
+d = json.load(open(p))
+cur = [x for x in (d.get("external_drivers") or []) if not x.startswith("S:")]
+merged = want + [x for x in cur if x not in want]
+if merged != (d.get("external_drivers") or []):
+    d["external_drivers"] = merged
+    json.dump(d, open(p, "w"), indent=2)
+    print("external_drivers restored:", merged)
+PY
+}
+
+# SteamVR latches safe mode in two places outside our repos: the crash-timestamp
+# file (any unclean vrserver exit rewrites it) and blocked_by_safe_mode flags
+# per driver. The settings UI clears neither, so without this every crash stuck
+# around forever and each manual clear was undone by the next crash.
+clear_safe_mode_latch() {
+  if pgrep -f "SteamVR/bin/linux64/vrserver" >/dev/null 2>&1; then
+    echo "warning: vrserver running, skipping safe-mode clear (would be overwritten)" >&2
+    return 0
+  fi
+  rm -f "$HOME/.local/share/Steam/config/vrserver_crash_timestamp.txt"
+  python3 - <<'PY'
+import json, os
+p = os.path.expanduser("~/.local/share/Steam/config/steamvr.vrsettings")
+try:
+    d = json.load(open(p))
+except Exception as e:
+    print(f"warning: cannot read vrsettings: {e}")
+    raise SystemExit
+cleared = [k for k, v in d.items()
+           if isinstance(v, dict) and v.pop("blocked_by_safe_mode", None) is not None]
+if cleared:
+    json.dump(d, open(p, "w"), indent=1)
+    print("safe-mode latch cleared:", ", ".join(cleared))
+else:
+    print("safe-mode latch: already clear")
+PY
+}
+
 start_steamvr() {
   command -v steam >/dev/null 2>&1 || die "steam command not found"
   nohup steam "steam://rungameid/$STEAMVR_APPID" >/dev/null 2>&1 &

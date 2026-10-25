@@ -16,6 +16,12 @@
 # Works with any host-launchable Proton build. Tested on Arch Linux.
 
 set -u
+case "${1:-}" in
+    -h|--help)
+        sed -n '2,18p' "$0"
+        exit 0
+        ;;
+esac
 APP_ID=2370570
 GAME_SUBDIR="Standable Full Body Estimation"
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -1222,25 +1228,53 @@ if [ "${1:-}" = "--uninstall" ]; then
     # Deployed vrclient copies (Proton maintains this dir too - removing ours
     # is harmless either way).
     run rm -fv "$PFX/drive_c/vrclient/bin"/vrclient*.dll*
-    # Everything the installer replaced under bin/, restoring the original
-    # stub/file from .bak when there is one. Untouched: Standable.exe,
-    # openvr_api.dll, vrclient_x64.dll, bin/win64/driver_standable.dll.
+    # Official files stay: driver_standable.so, libopenvr_api.so,
+    # standable_overlay, and the game's steam_api64.dll stub. Only remove the
+    # port's shim/helper files, and restore the native driver if we replaced it.
+    _drv="$GAME_DIR/bin/linux64/driver_standable.so"
+    _drv_bak="$(ls -1t "$_drv".bak-* 2>/dev/null | head -1)"
+    if [ -n "$_drv_bak" ]; then
+        run mv -f "$_drv_bak" "$_drv"
+        [ -n "$DRY_RUN" ] || say "restored driver_standable.so from backup"
+    elif [ -f "$_drv" ]; then
+        if cmp -s "$_drv" "$REPO/vendor/libdriver_ignition.so"; then
+            run rm -fv "$_drv"
+            warn "removed the Ignition shim; verify Standable in Steam to restore the official driver"
+        else
+            say "leaving driver_standable.so (not the port shim)"
+        fi
+    fi
+    run rm -f "$_drv".bak-*
+
     restore_or_remove \
-        "$GAME_DIR/bin/linux64/driver_standable.so" \
         "$GAME_DIR/bin/linux64/ignition_server.exe" \
         "$GAME_DIR/bin/linux64/ignition_bridge.dll" \
         "$GAME_DIR/bin/linux64/launch_serverhelper.sh" \
         "$GAME_DIR/bin/linux64/ignition.json" \
         "$GAME_DIR/bin/linux64/wine_psvr2_hidraw.reg" \
-        "$GAME_DIR/bin/linux64/steam_api64.dll" \
-        "$GAME_DIR/bin/win64/steam_api64.dll" \
         "$GAME_DIR/bin/linux64/python3" \
         "$GAME_DIR/bin/linux64/proton_resolve.sh" \
         "$GAME_DIR/bin/linux64/sweep.sh" \
         "$GAME_DIR/bin/linux64/win_vrpath.sh"
-    # vrpath seed: strip our entries (Linux path and S:\ form), keep the rest.
+
+    # steam_api64.dll: the game ships a 4 KB stub; the port deployed a real
+    # DLL and kept the stub as .stub-*. Restore the stub, never delete the
+    # official file.
+    for _sa in "$GAME_DIR/bin/linux64/steam_api64.dll" "$GAME_DIR/bin/win64/steam_api64.dll"; do
+        _stub="$(ls -1t "$_sa".stub-* 2>/dev/null | head -1)"
+        if [ -n "$_stub" ]; then
+            run cp -p "$_stub" "$_sa"
+            [ -n "$DRY_RUN" ] || say "restored $(basename "$_sa") from the official stub"
+        elif [ -f "$_sa" ]; then
+            warn "no official stub backup for $_sa; leaving it (verify Standable in Steam if needed)"
+        fi
+    done
+    unset _sa _stub
+
+    # vrpath seed: remove only the port's S:\ entry, keep the official
+    # game-directory entry.
     if [ -n "$DRY_RUN" ]; then
-        printf '\033[1;36m # \033[0mpython3 removes Standable entries from ~/.config/openvr/openvrpaths.vrpath\n'
+        printf '\033[1;36m # \033[0mpython3 removes the S:\\ seed from ~/.config/openvr/openvrpaths.vrpath\n'
     else
         python3 - <<'PYEOF' 2>/dev/null
 import json, os
@@ -1250,11 +1284,11 @@ try:
 except Exception:
     raise SystemExit(0)
 ed = data.get('external_drivers') or []
-new_ed = [e for e in ed if 'Standable' not in e]
+new_ed = [e for e in ed if not e.startswith('S:')]
 if len(new_ed) != len(ed):
     data['external_drivers'] = new_ed
     json.dump(data, open(p, 'w'), indent=2)
-    print("  removed %d Standable seed entr%s" % (len(ed) - len(new_ed), 'y' if len(ed) - len(new_ed) == 1 else 'ies'))
+    print("  removed %d S: seed entr%s" % (len(ed) - len(new_ed), 'y' if len(ed) - len(new_ed) == 1 else 'ies'))
 PYEOF
     fi
     # SteamPath registry value: drop it by editing user.reg directly (no
@@ -1293,17 +1327,11 @@ PYEOF
         # Do not grep globally here: Steam writes its own SteamPath in the
         # ActiveProcess subsection, which is not ours to remove.
     fi
-    # Restore the user's original SteamVR settings (backed up before our
-    # first boot-time modification), and drop the crash-timestamp trigger.
-    if [ -f "$STEAM_ROOT/config/steamvr.vrsettings.standable.bak" ]; then
-        run mv -f "$STEAM_ROOT/config/steamvr.vrsettings.standable.bak" "$STEAM_ROOT/config/steamvr.vrsettings"
-        [ -n "$DRY_RUN" ] || say "Restored your original steamvr.vrsettings"
-    else
-        [ -n "$DRY_RUN" ] || say "No steamvr.vrsettings backup found - left your settings as-is"
-    fi
+    # Do not restore steamvr.vrsettings.standable.bak: it can wipe official
+    # settings. Leave the current file alone.
     run rm -f "$STEAM_ROOT/config/vrserver_crash_timestamp.txt"
-    say "Uninstall complete - driver, server, hooks, seeds and registry value removed."
-    say "Restart SteamVR; it should no longer list or load a standable driver."
+    say "Uninstall complete - port files and S: seed removed; official driver, OpenVR lib, stub and addon entry kept."
+    say "Restart SteamVR; the official Standable driver remains registered."
     exit 0
 fi
 
@@ -1469,6 +1497,9 @@ fi
 run bash "$REPO/templates/win_vrpath.sh.in" "$PFX" "$GAME_DIR" "$S_TARGET"
 
 # -- scripts -----------------------------------------------------------------
+if [ -f "$GAME_DIR/bin/linux64/driver_standable.so" ] && ! cmp -s "$GAME_DIR/bin/linux64/driver_standable.so" "$IGN_LINUX64/libdriver_ignition.so"; then
+    die "official/native driver_standable.so is present; refusing to overwrite it with the Ignition shim"
+fi
 say "Deploying Linux driver shim (Ignition)…"
 run mkdir -p "$GAME_DIR/bin/linux64"
 bak "$GAME_DIR/bin/linux64/driver_standable.so"

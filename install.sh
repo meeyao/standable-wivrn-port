@@ -249,6 +249,12 @@ verify_vendor() {
 # does not depend on another repo at install time. See installer/UPSTREAM for the
 # commit it was taken from.
 run_port_installer() {
+    local driver="$HOME/.local/share/Steam/steamapps/common/Standable Full Body Estimation/bin/linux64/driver_standable.so"
+    local shim="$PORT_INSTALLER_DIR/vendor/libdriver_ignition.so"
+    if [ -f "$driver" ] && [ -f "$shim" ] && ! cmp -s "$driver" "$shim"; then
+        warn "driver_standable.so is the official/native driver; skipping the Ignition installer so it is not overwritten"
+        return 0
+    fi
     say "port installer: Standable + Proton prefix side"
     local script=""
     local s
@@ -456,6 +462,11 @@ Environment=WIVRN_USE_STEAMVR_LH=1
 Environment=LH_LOAD_STANDABLE=1
 Environment=LH_LOAD_LIGHTHOUSE=0
 Environment=LH_DISCOVER_WAIT_MS=30000
+# wivrn-server is not started by Steam, so SteamAPI_Init() cannot find the
+# appid and the native driver logs Auth: 17777 (unauthenticated).
+Environment=SteamAppId=2370570
+# Match the public feed: no head-yaw removal and no Stage-space offset.
+Environment=LH_FEED_NO_SPACE_OFFSET=1
 # Launch the Standable GUI from the driver helper so it joins the driver's
 # wineserver (sockets/discovery are unreliable under Proton). The SteamVR port
 # leaves this unset.
@@ -678,6 +689,18 @@ EOF
     say "GUI launcher: $INVOKING_HOME/.local/bin/standable-gui-wivrn"
 }
 
+# The Standable GUI runs under Proton and validates a Windows-side
+# openvrpaths.vrpath. Native-driver installs have no shim helper to repair it,
+# so install a small one-shot for the first GUI launch and Proton updates.
+install_gui_path_fix() {
+    local data="$XDG_DATA_HOME/standable-wivrn"
+    mkdir -p "$data" "$INVOKING_HOME/.local/bin"
+    install -m 0755 "$REPO_DIR/installer/templates/win_vrpath.sh.in" "$data/win_vrpath.sh"
+    install -m 0755 "$REPO_DIR/tools/fix-standable-gui-path.sh" "$INVOKING_HOME/.local/bin/standable-fix-gui-path"
+    say "GUI path repair: $INVOKING_HOME/.local/bin/standable-fix-gui-path"
+    "$INVOKING_HOME/.local/bin/standable-fix-gui-path" || true
+}
+
 # Record what this install owns, so uninstall.sh can offer the same choices.
 write_manifest() {
     mkdir -p "$MANIFEST_DIR"
@@ -752,6 +775,7 @@ install_dropin
 install_user_env
 install_vrswitch
 [ "$DO_GUI" -eq 1 ] && install_gui_launcher
+install_gui_path_fix
 
 ensure_steam_appid
 check_vrchat_launch_options

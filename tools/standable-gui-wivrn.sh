@@ -113,7 +113,22 @@ cd "$GAME_DIR" || exit 1
 # this is what makes the GUI's StandUI/StandAPI IPC reach the driver.
 WS_SOCK="/tmp/.wine-$(id -u)/server-$(printf %x "$(stat -c %d "$PFX" 2>/dev/null || echo 0)")-$(printf %x "$(stat -c %i "$PFX" 2>/dev/null || echo 0)")/socket"
 
-if [ -x "$PROTON_WINE" ] && [ -S "$WS_SOCK" ] && command -v python3 >/dev/null 2>&1; then
+# A socket file can survive the shim's wineserver. Only use it if something
+# is listening; otherwise let Wine start a fresh server. The native driver
+# does not need the shim's server.
+wine_socket_alive() {
+    python3 - "$WS_SOCK" <<'PY' 2>/dev/null
+import socket, sys
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.settimeout(1)
+try:
+    s.connect(sys.argv[1])
+except OSError:
+    sys.exit(1)
+PY
+}
+
+if [ -x "$PROTON_WINE" ] && [ -S "$WS_SOCK" ] && command -v python3 >/dev/null 2>&1 && wine_socket_alive; then
     python3 - "$WS_SOCK" "$PROTON_WINE" "$GAME_DIR/Standable.exe" >> "$LOG" 2>&1 <<'PY'
 import os, socket, sys
 s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
