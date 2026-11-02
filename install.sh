@@ -36,7 +36,7 @@ REAPER_BIN="/usr/local/bin/reap-ignition"
 DO_PORT=1
 DO_WIVRN=1
 DO_XRIZER=1
-DO_GUI=0
+DO_GUI=1
 DO_REAPER=0
 ASSUME_YES=0
 INSTALL_DEPS=0
@@ -87,7 +87,7 @@ choose_components() {
         printf '  1) [%s] Standable / Proton setup (Steam shims, prefix, driver hook)\n' "$([ "$DO_PORT" -eq 1 ] && echo x || echo ' ')"
         printf '  2) [%s] Patched WiVRn build (server + runtime)\n' "$([ "$DO_WIVRN" -eq 1 ] && echo x || echo ' ')"
         printf '  3) [%s] xrizer (OpenVR runtime)\n' "$([ "$DO_XRIZER" -eq 1 ] && echo x || echo ' ')"
-        printf '  4) [%s] Standalone GUI launcher (helper already starts the GUI)\n' "$([ "$DO_GUI" -eq 1 ] && echo x || echo ' ')"
+        printf '  4) [%s] Standalone GUI launcher (required on the native driver)\n' "$([ "$DO_GUI" -eq 1 ] && echo x || echo ' ')"
         printf '  5) [%s] Background orphan timer (start/stop cleanup stays on)\n' "$([ "$DO_REAPER" -eq 1 ] && echo x || echo ' ')"
         printf '\n  Numbers toggle, Enter installs, q quits.\n'
         read -r -p '> ' choice || die "aborted"
@@ -646,22 +646,49 @@ hookval() {
 }
 
 install_gui_launcher() {
-    # Desktop launcher for the Standable settings window under WiVRn. It reuses
-    # the paths the port installer baked into the launch hook (same prefix,
-    # Proton and game dir) so the two cannot drift.
+    # Desktop launcher for the Standable settings window under WiVRn. The
+    # vendored installer's launch hook has the paths, but native-driver
+    # installs skip it, so fall back to the Steam/prefix layout.
     local hook="$INVOKING_HOME/.local/bin/standable_launch_hook.sh"
-    if [ ! -f "$hook" ]; then
-        warn "launch hook not found; skipping the Standable GUI launcher"
-        return 0
+    local gd="" compat="" client="" proton="" appid=""
+    if [ -f "$hook" ]; then
+        gd="$(hookval GAME_DIR "$hook")"
+        compat="$(hookval STEAM_COMPAT_DATA_PATH "$hook")"
+        client="$(hookval STEAM_COMPAT_CLIENT_INSTALL_PATH "$hook")"
+        proton="$(hookval PROTON "$hook")"
+        appid="$(hookval SteamAppId "$hook")"
     fi
-    local gd compat client proton appid
-    gd="$(hookval GAME_DIR "$hook")"
-    compat="$(hookval STEAM_COMPAT_DATA_PATH "$hook")"
-    client="$(hookval STEAM_COMPAT_CLIENT_INSTALL_PATH "$hook")"
-    proton="$(hookval PROTON "$hook")"
-    appid="$(hookval SteamAppId "$hook")"
-    if [ -z "$gd" ] || [ -z "$compat" ] || [ -z "$proton" ] || [ -z "$appid" ]; then
-        warn "could not read paths from $hook; skipping the Standable GUI launcher"
+    [ -n "$gd" ] && [ ! -d "$gd" ] && gd=""
+    [ -n "$proton" ] && [ ! -x "$proton" ] && proton=""
+    [ -n "$gd" ] || gd="$INVOKING_HOME/.local/share/Steam/steamapps/common/Standable Full Body Estimation"
+    [ -n "$client" ] || client="$INVOKING_HOME/.local/share/Steam"
+    [ -n "$compat" ] || compat="$client/steamapps/compatdata/2370570"
+    [ -n "$appid" ] || appid=2370570
+    if [ -z "$proton" ]; then
+        local tool="" p
+        [ -f "$compat/config_info" ] && tool="$(head -n1 "$compat/config_info" 2>/dev/null)"
+        [ -n "$tool" ] && [ -x "$tool" ] && proton="$tool"
+        if [ -z "$proton" ]; then
+            local candidates=()
+            [ -n "$tool" ] && candidates+=(
+                "$client/steamapps/common/$tool/proton"
+                "$client/compatibilitytools.d/$tool/proton"
+            )
+            candidates+=(
+                "$client/steamapps/common/Proton - Experimental/proton"
+                "$client/steamapps/common/Proton 10.0/proton"
+            )
+            for p in "$client"/steamapps/common/Proton*/proton \
+                     "$client"/compatibilitytools.d/*/proton; do
+                [ -x "$p" ] && candidates+=("$p")
+            done
+            for p in "${candidates[@]}"; do
+                [ -x "$p" ] && { proton="$p"; break; }
+            done
+        fi
+    fi
+    if [ ! -d "$gd" ] || [ -z "$proton" ] || [ ! -x "$proton" ]; then
+        warn "could not resolve the Standable game dir or Proton; skipping the GUI launcher"
         return 0
     fi
     local confdir="$XDG_CONFIG_HOME/standable-wivrn"
@@ -689,9 +716,9 @@ EOF
     say "GUI launcher: $INVOKING_HOME/.local/bin/standable-gui-wivrn"
 }
 
-# The Standable GUI runs under Proton and validates a Windows-side
-# openvrpaths.vrpath. Native-driver installs have no shim helper to repair it,
-# so install a small one-shot for the first GUI launch and Proton updates.
+# The Standable GUI runs under Proton and checks a Windows-side path in the
+# prefix's openvrpaths.vrpath. Proton re-copies that file from the host at
+# every launch, so seed the host file once (and repair the current prefix).
 install_gui_path_fix() {
     local data="$XDG_DATA_HOME/standable-wivrn"
     mkdir -p "$data" "$INVOKING_HOME/.local/bin"
@@ -772,6 +799,12 @@ fi
 install_reaper
 
 install_dropin
+# cmake --install writes wivrn.service and install_dropin adds the drop-in.
+# systemd only notices them after a reload; without this `vrswitch wivrn`
+# fails with "Unit wivrn.service not found" on a fresh install.
+if command -v systemctl >/dev/null 2>&1; then
+    user_systemctl daemon-reload || true
+fi
 install_user_env
 install_vrswitch
 [ "$DO_GUI" -eq 1 ] && install_gui_launcher

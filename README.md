@@ -40,10 +40,13 @@ The installer:
 4. Installs the reaper binary and writes the systemd user drop-in that enables the `steamvr_lh` driver host.
 5. Warns if WayVR is missing (optional floor-height helper).
 
-By default only the core is installed. Optional components are off by default; select them in the checklist, or skip the checklist with `--yes`.
+By default the core is installed, including the standalone Standable GUI
+launcher (required on the v3.1 native driver). The background orphan timer is
+optional. Select components in the checklist, or skip it with `--yes`.
 
-- standalone Standable GUI launcher (required on the v3.1 native driver; the older shim helper starts its own)
-- background orphan timer (start/stop cleanup is always installed)
+- standalone Standable GUI launcher (installed by default; required on the v3.1
+  native driver; the older shim helper starts its own)
+- background orphan timer (optional; start/stop cleanup is always installed)
 
 The build takes a few minutes.
 
@@ -212,6 +215,9 @@ headset session is up, run:
 It connects to the running driver; the old wineserver restriction does not
 apply to the native driver. Do not start a second copy.
 
+The installer puts it at `~/.local/bin/standable-gui-wivrn`. If you used
+`--skip-gui`, re-run `./install.sh` without it.
+
 If the GUI warns that the SteamVR driver path is missing or incorrect, run
 `~/.local/bin/standable-fix-gui-path` once and restart it.
 
@@ -258,15 +264,17 @@ Expected. There is no Windows SteamVR; the installer posts shims for the paths S
 
 **The Standable GUI says "SteamVR driver path is missing or incorrect"**
 
-The GUI's Windows-side `openvrpaths.vrpath` has a Linux path or a stale
-`S:\` entry. Run:
+Proton copies `~/.config/openvr/openvrpaths.vrpath` into the prefix on every
+launch, and the GUI raw-checks it for its own `S:\` path. A Linux-only entry
+can never match. Run:
 
 ```sh
 ~/.local/bin/standable-fix-gui-path
 ```
 
-then restart the GUI. It repairs only the Proton prefix file; the native
-driver and the host SteamVR registration are left alone.
+then restart the GUI. It adds the `S:\` seed to the host file (the file Proton
+copies from) and repairs the current prefix copy. The native driver and the
+Linux SteamVR entry are left alone. `vrswitch steamvr` keeps the seed.
 
 **"error 305", or the driver will not load**
 
