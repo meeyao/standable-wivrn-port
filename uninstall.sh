@@ -148,6 +148,11 @@ if [ "$DO_WIVRN" -eq 1 ]; then
     act_root rm -rf /usr/lib/wivrn /usr/lib64/wivrn
     act_root rm -f "$UNIT"
     act_root rm -f "$OPENXR_DIR/openxr_wivrn.json"
+    # WiVRn's install rules also drop these outside the server/runtime dirs.
+    act_root rm -f "$WIVRN_BINDIR/wivrnctl"
+    act_root rm -f /usr/share/bash-completion/completions/wivrnctl
+    act_root rm -f /usr/share/zsh/site-functions/_wivrnctl
+    act_root rm -f /usr/lib/firewalld/services/wivrn.xml
     if [ -L "$RUNTIME_LINK" ] && [ "$(readlink "$RUNTIME_LINK" 2>/dev/null || true)" = "$OPENXR_DIR/openxr_wivrn.json" ]; then
         act rm -f "$RUNTIME_LINK"
     fi
@@ -200,9 +205,12 @@ fi
 if [ "$DO_GUI" -eq 1 ]; then
     say "removing the Standable GUI launcher"
     act rm -f "$INVOKING_HOME/.local/bin/standable-gui-wivrn"
+    act rm -f "$INVOKING_HOME/.local/bin/standable-fix-gui-path"
     act rm -f "$APP_DIR/standable-gui-wivrn.desktop"
     act rm -f "$GUI_CONF_DIR/paths.conf"
+    act rm -f "$INVOKING_HOME/.local/share/standable-wivrn/win_vrpath.sh"
     if [ "$DRY_RUN" -eq 0 ]; then
+        rmdir "$INVOKING_HOME/.local/share/standable-wivrn" 2>/dev/null || true
         rmdir "$GUI_CONF_DIR" 2>/dev/null || true
     fi
 fi
@@ -230,6 +238,9 @@ if [ "$DO_WIRING" -eq 1 ]; then
         rmdir "$(dirname "$DROPIN")" 2>/dev/null || true
     fi
     act rm -f "$INVOKING_HOME/.local/bin/vrswitch"
+    act rm -f "$INVOKING_HOME/.local/bin/standable_launch_hook.sh"
+    act rm -f "$INVOKING_HOME/bin/standable_launch_hook.sh"
+    act rm -f "$INVOKING_HOME/bin/standable-gui"
     act rm -f "$XDG_CONFIG_HOME/environment.d/wivrn-ipc.conf"
     if command -v systemctl >/dev/null 2>&1; then
         act user_systemctl daemon-reload || true
